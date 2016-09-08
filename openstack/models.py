@@ -21,13 +21,49 @@ SQLAlchemy models for octopunch data.
 
 from oslo_config import cfg
 from oslo_db.sqlalchemy import models
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, ForeignKey, Integer
+from sqlalchemy import String, Table, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
 
 CONF = cfg.CONF
 BASE = declarative_base()
+
+
+hosts_datastores = Table(
+    'hosts_datastores', BASE.metadata,
+    Column('host_uuid', String(length=45), ForeignKey('hosts.uuid')),
+    Column('datastore_uuid', String(length=45),
+           ForeignKey('datastores.uuid')),
+    mysql_engine='InnoDB'
+)
+
+virtual_machines_datastores = Table(
+    'virtual_machines_datastores', BASE.metadata,
+    Column('virtual_machine_uuid', String(length=45),
+           ForeignKey('virtual_machines.uuid')),
+    Column('datastore_uuid', String(length=45),
+           ForeignKey('datastores.uuid')),
+    mysql_engine='InnoDB'
+)
+
+virtual_machines_networks = Table(
+    'virtual_machines_networks', BASE.metadata,
+    Column('virtual_machine_uuid', String(length=45),
+           ForeignKey('virtual_machines.uuid')),
+    Column('network_uuid', String(length=45),
+           ForeignKey('networks.uuid')),
+    mysql_engine='InnoDB'
+)
+
+hosts_networks = Table(
+    'hosts_networks', BASE.metadata,
+    Column('host_uuid', String(length=45), ForeignKey('hosts.uuid')),
+    Column('network_uuid', String(length=45),
+           ForeignKey('networks.uuid')),
+    mysql_engine='InnoDB'
+)
 
 
 class OctopunchBase(models.TimestampMixin, models.ModelBase):
@@ -179,7 +215,7 @@ class VirtualMachine(BASE, OctopunchBase):
 
     guest_nics = relationship('GuestNics', backref='virtual_machines',
                               foreign_keys='GuestNics.virtual_machine_uuid',
-                              primarjoin='VirtualMachine.uuid =='
+                              primaryjoin='VirtualMachine.uuid =='
                                           'GuestNics.virtual_machine_uuid')
 
     datastores = relationship('Datastore',

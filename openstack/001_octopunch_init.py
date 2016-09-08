@@ -11,7 +11,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer
 from sqlalchemy import MetaData, String, Table
 
@@ -28,7 +27,7 @@ def define_tables(meta):
         Column('created_at', DateTime),
         Column('updated_at', DateTime),
         Column('deleted_at', DateTime),
-        Column('uuid', String(length=45), primary_key=True, nullable=False),
+        Column('uuid', String(length=45), primary_key=True),
         Column('vc_value', String(length=255)),
         Column('name', String(length=255)),
         Column('vcs_ip', String(length=255), nullable=False),
