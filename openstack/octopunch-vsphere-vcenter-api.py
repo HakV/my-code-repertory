@@ -61,17 +61,6 @@ class API(base.Base):
         return self.db.vcenter_create(context, values)
 
 
-    def vcenter_delete(self, context, uuid):
-        """Delete a vcenter.
-        
-        :param context: class:`RequestContext` instance
-        
-        :param uuid: uuid of vcenter.
-        :type: ``str``
-        """
-        return self.db.vcenter_delete(context, uuid)
-
-
     def vcenter_update(self, context, uuid, body=None):
         """Update a vcenter.
         
@@ -84,10 +73,15 @@ class API(base.Base):
         :type:``dict``
         
         :return: return a class:`VcenterInfo` instance"""
-        return self.db.vcenter_update(content, uuid, body)
+        return self.db.vcenter_update(context, uuid, body)
 
 
-
-
-
-
+    def vcenter_delete(self, context, uuid):
+        """Delete a vcenter.
+        
+        :param context: class:`RequestContext` instance
+        
+        :param uuid: uuid of vcenter.
+        :type: ``str``
+        """
+        return self.db.vcenter_delete(context, uuid)

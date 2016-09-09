@@ -17,11 +17,16 @@
 # under the License.
 import uuid as uuid_generator
 
+import webob
 from webob import exc
 
+from octopunch import exception
 from octopunch.api.openstack import wsgi
 from octopunch.vsphere.vcenter import api 
+from octopunch.i18n import _LE
+from oslo_log import log as logging
 
+LOG = logging.getLogger(__file__)
 
 class VcenterController(wsgi.Controller):
 
@@ -39,16 +44,17 @@ class VcenterController(wsgi.Controller):
 
     @wsgi.serializers()
     def show(self, req, id):
-        return
+        """show a vcenter."""
+
+        context = req.environ['octopunch.context']
+        vcenter = self.vcenter_api.vcenter_get(context, id)
+        return {'vcenter':vcenter}
 
     @wsgi.serializers()
     def create(self, req, body):
         """Create a vcenter."""
         context = req.environ['octopunch.context']
         
-        import pdb
-        pdb.set_trace()
-
         uuid = str(uuid_generator.uuid4())
 
         vcs_ip = body.get('vcs_ip')
@@ -77,12 +83,47 @@ class VcenterController(wsgi.Controller):
         return {'vcenter':vcenter}
 
     @wsgi.serializers()
-    def update():
-        return
+    def update(self, req, id, body=None):
+        """Update the vcenter."""
+
+        import pdb
+        pdb.set_trace()
+        context = req.environ['octopunch.context']
+
+        if body is None or body == '':
+            raise exc.HTTPUnprocessableEntity()
+
+        valid_create_keys = ('vc_value',
+                             'name',
+                             'vcs_ip',
+                             'username',
+                             'password')
+
+        update_dict = {}
+
+        for key in valid_create_keys:
+            if key in body:
+                update_dict[key] = body[key]
+        
+        try:
+           vcenter = self.vcenter_api.vcenter_update(context, id,
+                                                update_dict) 
+        except exception.NotFound:
+            raise exc.HTTPNotFound
+
+        return {'vcenter':vcenter}
 
     @wsgi.serializers()
-    def delete():
-        return
+    def delete(self, req, id):
+        """Delete the vcenter."""
+        context = req.environ['octopunch.context']
+        LOG.info(_LE("Delete vcenter with id %s"), id,
+                 context=context)
+        try:
+            self.vcenter_api.vcenter_delete(context, id)
+            return webob.Response(status_int=202)
+        except exception.NotFound:
+            raise exc.HTTPNotFound
 
 
 def create_resource(ext_mgr):

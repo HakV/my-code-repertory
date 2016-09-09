@@ -171,12 +171,24 @@ def vcenter_get_all(context, filters=None):
     session = get_session()
     with session.begin():
         vcenters_info = session.query(models.Vcenter).all()
-    return vcenters_info
+        return vcenters_info
 
 
 @require_context
 def vcenter_get(context, uuid):
-    return
+    """Get a vcenter.
+    
+    :param context: class:`RequestCOntext` instance.
+    
+    :param uuid: uuid of vcenter.
+    :type: ``str``
+    
+    :return: return a class:`Vcenter` instance"""
+    session = get_session()
+    with session.begin():
+        vcenter_info = session.query(models.Vcenter).\
+                filter_by(uuid=uuid).first()
+    return vcenter_info
 
 
 @require_context
@@ -187,7 +199,7 @@ def vcenter_create(context, values):
     
     :param values: values of vcenter.
     
-    :return: return a class:`vcenter` instance.
+    :return: return a class:`Vcenter` instance.
     """
     session = get_session()
     with session.begin():
@@ -195,14 +207,36 @@ def vcenter_create(context, values):
         vcenter.update(values)
         session = get_session()
         vcenter.save(session)
-    return vcenter
-
-
-@require_context
-def vcenter_delect(context, uuid):
-    return
+        return vcenter
 
 
 @require_context
 def vcenter_update(context, uuid, body):
-    return
+    """Update vcenter by uuid,need save data after update
+    
+    :param context: class:`RequestContext` instance
+    
+    :param uuid: uuid of vcenter
+    :type: ``str``
+    
+    :param body: the content of update
+    :type: ``dict``
+    
+    :return: return a class:'Vcenter' instance
+    """
+    session = get_session()
+    with session.begin():
+        vcenter_ref = session.query(models.Vcenter).\
+                filter_by(uuid=uuid).first()
+        vcenter_ref.update(body)
+        vcenter_ref.save(session)
+        return vcenter_ref
+
+
+@require_context
+def vcenter_delete(context, uuid):
+    session = get_session()
+    with session.begin():
+        vcenter_ref = session.query(models.Vcenter).\
+                filter_by(uuid=uuid).delete()
+        return vcenter_ref
