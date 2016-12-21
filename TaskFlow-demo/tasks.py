@@ -13,16 +13,18 @@ class CallJim(task.Task):
 
     def execute(self, jim_number, *args, **kwargs):
         print "Calling Jim %s." % jim_number
-        jim_new_number = jim_number + '123'
+        print '=' * 10
+        jim_new_number = jim_number + 'new'
 
         return {'jim_new_number': jim_new_number}
 
     def revert(self, result, *args, **kwargs):
         if isinstance(result, task_failed.Failure):
+            print "jim result"
             return None
 
         jim_new_number = result['jim_new_number']
-        print "Call %s and apologizing." % jim_new_number
+        print "Calling jim %s and apologizing." % jim_new_number
 
 
 class CallJoe(task.Task):
@@ -32,20 +34,21 @@ class CallJoe(task.Task):
     def execute(self, joe_number, jim_new_number, *args, **kwargs):
         print "Calling jim %s." % jim_new_number
         print "Calling Joe %s." % joe_number
-        joe_new_number = joe_number + '123'
+        print '=' * 10
+        joe_new_number = joe_number + 'new'
 
         return {'jim_new_number': jim_new_number,
                 'joe_new_number': joe_new_number}
 
     def revert(self, result, *args, **kwargs):
         if isinstance(result, task_failed.Failure):
+            print "joe result"
             return None
 
         jim_new_number = result['jim_new_number']
         joe_new_number = result['joe_new_number']
 
-        print "Calling %s and apologizing." % jim_new_number
-        print "Calling %s and apologizing." % joe_new_number
+        print "Calling joe %s and apologizing." % joe_new_number
 
 
 class CallJmilkFan(task.Task):
@@ -54,12 +57,13 @@ class CallJmilkFan(task.Task):
 
     def execute(self, jim_new_number, joe_new_number, jmilkfan_number,
                 *args, **kwargs):
-        raise ValueError('Error')
         print "Calling jim %s" % jim_new_number
         print "Calling joe %s" % joe_new_number
         print "Calling jmilkfan %s" % jmilkfan_number
-        jmilkfan_new_number = jmilkfan_number + '123'
+        print '=' * 10
+        jmilkfan_new_number = jmilkfan_number + 'new'
 
+        raise ValueError('Error')
         new_numbers =  {'jim_new_number': jim_new_number,
                         'joe_new_number': joe_new_number,
                         'jmilkfan_new_number': jmilkfan_new_number}
@@ -68,15 +72,14 @@ class CallJmilkFan(task.Task):
 
     def revert(self, result, *args, **kwargs):
         if isinstance(result, task_failed.Failure):
+            print "jmilkfan result"
             return None
 
         jim_new_number = result['jim_new_number']
         joe_new_number = result['joe_new_number']
         jmilkfan_new_number = result['jmilkfan_new_number']
 
-        print "Calling %s and apologizing." % jim_new_number
-        print "Calling %s and apologizing." % joe_new_number
-        print "Calling %s and apologizing." % jmilkfan_new_number
+        print "Calling jmilkfan %s and apologizing." % jmilkfan_new_number
 
 
 def get_flow(flow, numbers):
