@@ -1,154 +1,243 @@
-# Copyright 2016 Beijing Huron Technology Co.Ltd.
-#
-# Authors: He Qun <hequn@hihuron.com>
-# Authors: Fan Guiju <fanguiju@hihuron.com>
-#
-# Licensed under the Apache License, Version 2.0 (the "License"); you may
-# not use this file except in compliance with the License. You may obtain
-# a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-# License for the specific language governing permissions and limitations
-# under the License.
-
-"""VMWare client"""
-
 from urlparse import urlparse
-import uuid
 
-from oslo_config import cfg
-from oslo_log import log as logging
-from oslo_vmware import exceptions as vexc
+from oslo_vmware import api
 from oslo_vmware import vim_util
-
-from egis import exception
-from egis.i18n import _, _LE, _LI
-from egis.virt.vmware import session as vmware_session
-from egis.virt.vmware import vif_model as network_model
-from egis.virt.vmware import vim_util as vutil
+from oslo_vmware import exceptions as vexc
 
 
-VMWARE_OPTS = [
-    cfg.IntOpt('vnc_port_start', default=5900,
-               help='Start port of vnc.'),
-    cfg.IntOpt('vnc_port_total', default=1000,
-               help='End port of vnc.')
-]
-
-CONF = cfg.CONF
-CONF.register_opts(VMWARE_OPTS, 'vmware')
-
-LOG = logging.getLogger(__name__)
-VNC_CONFIG_KEY = 'config.extraConfig["RemoteDisplay.vnc.port"]'
+_SESSION = None
 
 API_RETRY_COUNT = 2
 TASK_POLL_INTERVAL = 3
 MAX_SINGLE_CALL = 100
+
+VNC_CONFIG_KEY = 'config.extraConfig["RemoteDisplay.vnc.port"]'
 BIOS_MODE = 'bios'
 EFI_MODE = 'efi'
 
 
-class VmwareClient(object):
+class VSphereClient(object):
+    """Client of vSphere."""
 
-    def __init__(self, auth_url, username, password):
-        self.vcenter_ip = urlparse(auth_url).hostname
-        self.session = vmware_session.get_session(
-            auth_url,
-            username,
-            password)
+    def __init__(self, vsphere_url, username, password):
+        """Get the instance of VSphereClient.
 
-    def get_host_initiator(self, host_ip):
-        session = self.session
-        host = self._get_host_ref(host_ip)
-        host_storage_device = session.invoke_api(
-            vim_util, 'get_object_properties_dict',
-            session.vim, host,
-            'config.storageDevice.hostBusAdapter')
+        :params vsphere_url: a string of vSphere connection url.
+        :type: ``str``
+            e.g. 'https://127.0.0.1:443'
 
-        if host_storage_device is None or \
-                host_storage_device["config.storageDevice.hostBusAdapter"].\
-                HostHostBusAdapter is None:
-            initiator_name = None
-            initiator_protocol = None
-
-        host_bus_adapters = host_storage_device[
-            "config.storageDevice.hostBusAdapter"].HostHostBusAdapter
-
-        hba_iscsi = []
-        for hba in host_bus_adapters:
-            if hba.__class__.__name__ == 'HostInternetScsiHba':
-                hba_iscsi.append(hba)
-        # FIXME(Fan Guiju): Use many kinds of protocols.
-        if not hba_iscsi or not len(hba_iscsi):
-            initiator_protocol = 'ISCSI'
-            initiator_name = None
-        else:
-            initiator_protocol = 'ISCSI'
-            initiator_name = hba_iscsi[0].iScsiName
-
-        return (initiator_protocol, initiator_name)
-
-    def _get_host_ref(self, host_ip):
-        """Get reference to a host within the host specified.
-
-        :param host_ip: the ip of host
+        :params username: a string of vSphere login username.
         :type: ``str``
 
-        :rtype: (obj){
-                    value = "host-140"
-                    _type = "Host"
-                }
-
+        :params password: a string of vSphere login password.
+        :type: ``str``
         """
-        session = self.session
-        # param: maximum number of objects that should be returned in a
-        #        single call = 100
-        results = session.invoke_api(vim_util, "get_objects",
-                                     session.vim, "HostSystem",
-                                     MAX_SINGLE_CALL)
 
-        session.invoke_api(vim_util, 'cancel_retrieval', session.vim, results)
+        vsphere_url = urlparse(vsphere_url)
+        self.vsphere_ipaddr = vsphere_url.hostname
+        self.vsphere_port = vsphere_url.port
+        global _SESSION
+        if _SESSION:
+            self.session = _SESSION
+        else:
+            try:
+                _SESSION = self.session = api.VMwareAPISession(
+                    host=self.vsphere_ipaddr,
+                    server_username=username,
+                    server_password=password,
+                    api_retry_count=API_RETRY_COUNT,
+                    task_poll_interval=TASK_POLL_INNTERVAL,
+                    port=self.vsphere_port)
+            except vexc.VimFaultException:
+                raise
+            except Exception:
+                raise
 
-        # is esxi host
-        if host_ip == self.vcenter_ip:
-            return results.objects[0].obj
+    def _managed_object(self, managed_object_type, action='get_objects'):
+        """Get managed object of vSphere."""
+        try:
+            # param: maximum number of objects that should be returned in a
+            #        single call = 100
+            managed_object = self.session.invoke_api(
+                vim_util,
+                action,
+                self.session.vim,
+                managed_object_type,
+                MAX_NUMBER_OBJECTS_RETURN)
+        except vexc.ManagedObjectNotFoundException as err:
+            raise
+        return managed_object
 
-        # is vcenter
-        for host in results.objects:
+    def _manager_properties_dict_get(self, managed_subobject, propertie):
+        """Get the properties of managed sub-object."""
+        try:
+            manager_properties_dict = self.session.invoke_api(
+                vim_util,
+                'get_object_properties_dict',
+                self.session.vim,
+                managed_subobject,
+                propertie)
+        except Exception:
+            raise
+        return manager_properties_dict
+
+    def _get_host_obj(self, host_ip):
+        """Get host reference via specified host ipaddr from vSphere.
+
+            e.g. (obj){
+                     value = "host-140"
+                     _type = "Host"
+                 }
+        """
+        hosts = self._managed_object('HostSystem')
+        self._managed_object('HostSystem', action='cancel_retrieval')
+
+        if host_ip == self.vsphere_ipaddr:
+            # The host belong to esxi host.
+            return hosts.objects[0].obj
+
+        # The host belong to vCenter.
+        for host in hosts.objects:
             if host_ip == host.propSet[0].val:
                 return host.obj
-
-        LOG.error(_LE("Host: %s not found!") % host_ip)
         raise vexc.ManagedObjectNotFoundException()
 
-    def _get_vm_ref(self, vm_name):
-        """Get reference to a vm within the vm name specified.
+    def _get_vm_obj(self, vm_name):
+        """Get virtual machine reference via specified name from vSphere.
 
-        :param vm_name: the name of vm
-        :type: ``str``
-
-        :rtype: (obj){
-                    value = "vm-140"
-                    _type = "VirtualMachine"
-                }
+            e.g. (obj){
+                     value = "vm-140"
+                     _type = "VirtualMachine"
+                 }
         """
-        session = self.session
-        results = session.invoke_api(vim_util, "get_objects",
-                                     session.vim, "VirtualMachine",
-                                     MAX_SINGLE_CALL)
+        vms = self._managed_object('VirtualMachine')
+        self._managed_object('VirtualMachine', action='cancel_retrieval')
 
-        session.invoke_api(vim_util, 'cancel_retrieval', session.vim, results)
-
-        for vm in results.objects:
+        for vm in vms.objects:
             if vm_name == vm.propSet[0].val:
                 return vm.obj
-
-        LOG.error(_LE("Virtualmachine: %s not found!") % vm_name)
         raise vexc.ManagedObjectNotFoundException()
+
+    def _get_cluster_obj(self, host_obj_value):
+        """Get cluster reference via specified host_value from vSphere."""
+        clusters = self._managed_object('ComputeResource')
+
+        for cluster in clusters.objects:
+            hosts = _manager_properties_dict_get(cluster.obj, 'host')
+            if not hosts.get('host'):
+                continue
+            for host in hosts.get('host')[0]:
+                if host.value == host_obj_value:
+                    return cluster.obj
+        raise vexc.ManagedObjectNotFoundException()
+
+    def get_vswitch(self, host_ip):
+        """Get vswitch reference via host ipaddr from vSphere.
+
+        :param host_ip: the host ipaddr.
+        :type: ``str``
+
+        :rtype: ``suds.sudsobject.ArrayOfHostVirtualSwitch``
+        """
+        host_obj = self._get_host_ref(host_ip)
+        vswitchs = self._manager_properties_dict_get(host_obj,
+                                                     'config.network.vswitch')
+        return vswitchs
+
+    def _get_res_pool(self, cluster_obj):
+        """Get resource pool reference via cluster object from vSphere."""
+
+        # Get the root resource pool of the cluster
+        resource_pool = self._manager_properties_dict_get(cluster_obj,
+                                                          'resourcePool')
+        return resource_pool
+
+    def get_datacenter_obj(self, host_ip):
+        datacenters = self._managed_object_get('Datacenter')
+        for datacenter in datacenters.objects:
+            host_folder = self._manager_properties_dict_get(datacenter.obj,
+                                                            'hostFolder')
+            host_folder_obj = host_folder.get('hostFolder')
+            if not host_folder_obj:
+                continue
+
+            hosts = self._manager_properties_dict_get(host_folder_obj,
+                                                      'childEntity')
+            hosts = hosts.get('childEntity')
+            if not hosts:
+                continue
+
+            host_obj = self._get_host_obj(host_ip)
+            specific_cluster = self._get_cluster_ref(host_obj.value)
+            for child in hosts[0]:
+                if child._type == 'ClusterComputeResource' or\
+                        child._type == 'ComputeResource':
+                    if child.value == specific_cluster.value:
+                        return datacenter.obj
+                elif child._type == 'HostSystem':
+                    if child.value == host.value:
+                        return datacenter.obj
+                else:
+                    continue
+        raise vexc.ManagedObjectNotFoundException()
+
+    def _get_vmfolder(self, host_ip):
+        if host_ip == self.vsphere_ipaddr:
+            # The host belong to vSphere(esxi).
+            datacenter = self._managed_object_get('Datacenter')
+            vm_folder = self._manager_properties_dict_get(
+                datacenter.objects[0].obj,
+                'vmFolder')
+            return vm_folder.get('vmFolder')
+
+        # The host belong to vSphere(vCenter).
+        datacenter = self.get_datacenter_by_host(host_ip)
+        vm_folder = self._manager_properties_dict_get(
+            datacenter,
+            'vmFolder')
+
+        vm_folder = vm_folder.get('vmFolder')
+        if not vm_folder:
+            raise vexc.ManagedObjectNotFoundException()
+        return vm_folder
+
+    # NOTE(Fan Guiju)
+    def get_datastore_name(self, host_ip):
+        session = self.session
+        # ESXi host
+        if host_ip == self.vcenter_ip:
+            datastore = session.invoke_api(vim_util, 'get_objects',
+                                           session.vim, 'Datastore',
+                                           MAX_SINGLE_CALL)
+            return datastore.objects[0].propSet[0].val
+
+        # Vcenter
+        datastores = session.invoke_api(vim_util, 'get_objects', session.vim,
+                                        'Datastore', MAX_SINGLE_CALL)
+        host = self._get_host_ref(host_ip)
+        for datastore in datastores.objects:
+            dc_hosts = session.invoke_api(vim_util,
+                                          'get_object_properties_dict',
+                                          session.vim,
+                                          datastore.obj, 'host')
+            dc_hosts = dc_hosts.get('host')
+
+            if not dc_hosts:
+                continue
+
+            for dc_host in dc_hosts[0]:
+                if host.value == dc_host.key.value and \
+                        datastore.propSet[0].val.split('_', 1)[0] != 'Drp':
+                    free_space = session.invoke_api(vim_util,
+                                                    "get_object_property",
+                                                    session.vim,
+                                                    datastore.obj,
+                                                    "summary").freeSpace
+                    if free_space:
+                        return datastore.propSet[0].val
+
+        LOG.error(_LE("Datastore not found in host: %s!") % host_ip)
+        raise exception.NoDataStore(host=host_ip)
 
     def get_vdisk_info(self, vm_name):
         """Get virtual disk information fot vmware instance."""
@@ -176,38 +265,6 @@ class VmwareClient(object):
                     vdisk_driver.append('ide')
             return vdisk_driver
 
-    def _get_cluster_ref(self, host_value):
-        session = self.session
-        clusters = session.invoke_api(vim_util, "get_objects",
-                                      session.vim, "ComputeResource",
-                                      MAX_SINGLE_CALL)
-        for cluster in clusters.objects:
-            hosts = session.invoke_api(vim_util, 'get_object_properties_dict',
-                                       session.vim, cluster.obj, 'host')
-            if not hosts.get('host'):
-                continue
-
-            for host in hosts.get('host')[0]:
-                if host.value == host_value:
-                    return cluster.obj
-
-        LOG.error(_LE("Cluster not found in host: %s") % host_value)
-        raise vexc.ManagedObjectNotFoundException()
-
-    def get_vswitch(self, host_ip):
-        """Get vswitch name.
-
-        :param host_ip: the host of ip
-        :type: ``str``
-
-        :rtype: ``suds.sudsobject.ArrayOfHostVirtualSwitch``
-        """
-        session = self.session
-        host_mor = self._get_host_ref(host_ip)
-        vswitches_ret = session.invoke_api(vim_util, "get_object_property",
-                                           session.vim, host_mor,
-                                           "config.network.vswitch")
-        return vswitches_ret
 
     def _get_add_vswitch_port_group_spec(self, client_factory, vswitch_name,
                                          port_group_name, vlan_id):
@@ -392,127 +449,6 @@ class VmwareClient(object):
 
         return config_spec, vnc_opts
 
-    def _get_res_pool_ref(self, cluster):
-        """Get the resource pool."""
-        # Get the root resource pool of the cluster
-        session = self.session
-        res_pool_ref = session.invoke_api(vim_util,
-                                          "get_object_property",
-                                          session.vim,
-                                          cluster,
-                                          "resourcePool")
-        return res_pool_ref
-
-    def get_datacenter_by_host(self, host_ip):
-        session = self.session
-        datacenters = session.invoke_api(vim_util, 'get_objects', session.vim,
-                                         'Datacenter', MAX_SINGLE_CALL)
-        for datacenter in datacenters.objects:
-            res_folder = session.invoke_api(vim_util,
-                                            'get_object_properties_dict',
-                                            session.vim,
-                                            datacenter.obj, 'hostFolder')
-
-            host_folder = res_folder.get('hostFolder')
-
-            if not host_folder:
-                continue
-
-            hosts = session.invoke_api(vim_util,
-                                       'get_object_properties_dict',
-                                       session.vim,
-                                       host_folder, 'childEntity')
-
-            hosts = hosts.get('childEntity')
-
-            if not hosts:
-                continue
-
-            # NOTE(He Qun): because of host folder have cluster and host
-            #               infomation, we need to match host use difference
-            #               method.
-            host = self._get_host_ref(host_ip)
-            specific_cluster = self._get_cluster_ref(host.value)
-            for child in hosts[0]:
-                if child._type == 'ClusterComputeResource' or\
-                        child._type == 'ComputeResource':
-                    if child.value == specific_cluster.value:
-                        return datacenter.obj
-
-                elif child._type == 'HostSystem':
-                    if child.value == host.value:
-                        return datacenter.obj
-
-                else:
-                    continue
-
-        LOG.error(_LE("Datacenter not found in host: %s!") % host_ip)
-        raise vexc.ManagedObjectNotFoundException()
-
-    def _get_vmfolder_ref(self, host_ip):
-        session = self.session
-        # ESXi host
-        if host_ip == self.vcenter_ip:
-            datacenter = session.invoke_api(vim_util, 'get_objects',
-                                            session.vim,
-                                            'Datacenter', MAX_SINGLE_CALL)
-            vmFolder = session.invoke_api(vim_util,
-                                          'get_object_properties_dict',
-                                          session.vim,
-                                          datacenter.objects[0].obj,
-                                          'vmFolder')
-            return vmFolder.get('vmFolder')
-
-        # Vcenter
-        # NOTE(He Qun): we find vmfolder by specified host, because of
-        #               datacenter have not host infomation, so we get
-        #               cluster infomation to match host and datacenter.
-        datacenter = self.get_datacenter_by_host(host_ip)
-        vmFolder = session.invoke_api(vim_util, 'get_object_properties_dict',
-                                      session.vim, datacenter, 'vmFolder')
-
-        vmfolder = vmFolder.get('vmFolder')
-        if not vmfolder:
-            LOG.error(_LE("Vmfolder not found in host: %s!") % host_ip)
-            raise vexc.ManagedObjectNotFoundException()
-        return vmfolder
-
-    def get_datastore_name(self, host_ip):
-        session = self.session
-        # ESXi host
-        if host_ip == self.vcenter_ip:
-            datastore = session.invoke_api(vim_util, 'get_objects',
-                                           session.vim, 'Datastore',
-                                           MAX_SINGLE_CALL)
-            return datastore.objects[0].propSet[0].val
-
-        # Vcenter
-        datastores = session.invoke_api(vim_util, 'get_objects', session.vim,
-                                        'Datastore', MAX_SINGLE_CALL)
-        host = self._get_host_ref(host_ip)
-        for datastore in datastores.objects:
-            dc_hosts = session.invoke_api(vim_util,
-                                          'get_object_properties_dict',
-                                          session.vim,
-                                          datastore.obj, 'host')
-            dc_hosts = dc_hosts.get('host')
-
-            if not dc_hosts:
-                continue
-
-            for dc_host in dc_hosts[0]:
-                if host.value == dc_host.key.value and \
-                        datastore.propSet[0].val.split('_', 1)[0] != 'Drp':
-                    free_space = session.invoke_api(vim_util,
-                                                    "get_object_property",
-                                                    session.vim,
-                                                    datastore.obj,
-                                                    "summary").freeSpace
-                    if free_space:
-                        return datastore.propSet[0].val
-
-        LOG.error(_LE("Datastore not found in host: %s!") % host_ip)
-        raise exception.NoDataStore(host=host_ip)
 
     def create_port_group(self, pg_name, vswitch_name, host_ip, vlan_id=0):
         """Creates a port group on specific host."""
@@ -792,3 +728,35 @@ class VmwareClient(object):
         opt_keymap.value = 'en-us'
 
         return [opt_enabled, opt_port, opt_keymap]
+
+    def get_host_initiator(self, host_ip):
+        session = self.session
+        host = self._get_host_ref(host_ip)
+        host_storage_device = session.invoke_api(
+            vim_util, 'get_object_properties_dict',
+            session.vim, host,
+            'config.storageDevice.hostBusAdapter')
+
+        if host_storage_device is None or \
+                host_storage_device["config.storageDevice.hostBusAdapter"].\
+                HostHostBusAdapter is None:
+            initiator_name = None
+            initiator_protocol = None
+
+        host_bus_adapters = host_storage_device[
+            "config.storageDevice.hostBusAdapter"].HostHostBusAdapter
+
+        hba_iscsi = []
+        for hba in host_bus_adapters:
+            if hba.__class__.__name__ == 'HostInternetScsiHba':
+                hba_iscsi.append(hba)
+        # FIXME(Fan Guiju): Use many kinds of protocols.
+        if not hba_iscsi or not len(hba_iscsi):
+            initiator_protocol = 'ISCSI'
+            initiator_name = None
+        else:
+            initiator_protocol = 'ISCSI'
+            initiator_name = hba_iscsi[0].iScsiName
+
+        return (initiator_protocol, initiator_name)
+

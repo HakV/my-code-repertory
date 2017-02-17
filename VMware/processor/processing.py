@@ -1,52 +1,22 @@
-# Copyright 2016 Beijing Huron Technology Co.Ltd.
-#
-# Authors: Fan Guiju <fanguiju@hihuron.com>
-#
-#    Licensed under the Apache License, Version 2.0 (the "License"); you may
-#    not use this file except in compliance with the License. You may obtain
-#    a copy of the License at
-#
-#         http://www.apache.org/licenses/LICENSE-2.0
-#
-#    Unless required by applicable law or agreed to in writing, software
-#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-#    License for the specific language governing permissions and limitations
-#    under the License.
-
 from urlparse import urlparse
 from uuid import uuid4
 
-from oslo_log import log as logging
-
-from egis.virt.base import api as core_api
-from egis.virt.vmware.collector import collecting
-
-
-LOG = logging.getLogger(__name__)
+from collector import collecting
 
 
 class DataProcessor(object):
     """Vmware information handle."""
 
-    def __init__(self, context, vmware_connect_id):
-        self.collector = collecting.DataCollector(context, vmware_connect_id)
-        self.context = context
-        self.vmware_connect_id = vmware_connect_id
-        self.core_api = core_api.API()
+    def __init__(self, auth_url, username, password):
+        self.collector = collecting.DataCollector(auth_url, username, password)
 
-    def to_dict(self, **kwargs):
+    def to_dict(self, *args, **kwargs):
         dict_ref = {}
         for key, value in kwargs.items():
             dict_ref[key] = value
         return dict_ref
 
     def _get_vmware_network_info(self, host, port_group_name):
-
-        LOG.debug("Get vmware network info for standard port group %(pg)s "
-                  "from host %(host)s.",
-                  {'pg': port_group_name, 'host': host})
-
         # Get the vlan_id with port group.
         port_group_object = self.collector.\
             manager_properties_dict_get(host.obj,
@@ -63,7 +33,6 @@ class DataProcessor(object):
 
     def _get_vmware_dvsnetwork_info(self, network_summary,
                                     dvpg_cfg):
-
         dvspg_key = network_summary['summary'].network.value
 
         # Get overall networks
@@ -111,42 +80,6 @@ class DataProcessor(object):
                 vlan_id=vlan_id)
             return vmware_dvsnetwork_dict
 
-    def vmware_host_list(self, context):
-        """Get the vmware esxi hypervisor information."""
-
-        # Get hosts uuid from DB.
-        filters = {'connection_uuid': self.vmware_connect_id,
-                   'type': 'vmware'}
-        hosts_from_db = self.core_api.hyper_host_get_all(context,
-                                                         filters=filters)
-        db_hosts = [host.get('name') for host in hosts_from_db]
-
-        # Get hosts uuid from VMware.
-        vmware_hosts = []
-        hosts_from_vmware = self.collector.managed_object_get('HostSystem')
-        hosts_from_vmware = hosts_from_vmware.objects
-        for host in hosts_from_vmware:
-            vmware_hosts.append(host.obj.value)
-
-        # Compare the two List object to find different hosts.
-        host_need_delete = [host for host in hosts_from_db if
-                            host.get('name') not in vmware_hosts]
-        host_need_create = [host for host in hosts_from_vmware if
-                            host.obj.value not in db_hosts]
-
-        for host in host_need_delete:
-            self.core_api.hyper_host_delete(context, host.id)
-            network_need_delete = self.core_api.hyper_network_get_all(
-                context,
-                filters={'constraints': 'hyper_host:' + host.id})
-            for network in network_need_delete:
-                self.core_api.hyper_network_delete(context, network.id)
-
-        values_list = network_list = []
-        if host_need_create:
-            values_list, network_list = self.get_esxi_hypervisors_values(
-                host_need_create)
-        return (values_list, network_list)
 
     def get_esxi_hypervisors_values(self, hosts):
         host_values_list = []
@@ -216,7 +149,6 @@ class DataProcessor(object):
                     vlan_id = self._get_vmware_network_info(host,
                                                             iface_name)
 
-                    # FIXME (Fan Guiju): Get values of all the fields.
                     standard_network_values = {
                         'iface_name': iface_name,
                         'physical_name': None,
@@ -226,8 +158,7 @@ class DataProcessor(object):
                         'managed': False,
                         'type': 'vmware',
                         'hyper_id': hyper_id,
-                        'constraints': 'hyper_host:' + esxi_hypervisor_id,
-                        'connection_uuid': self.vmware_connect_id}
+                        'constraints': 'hyper_host:' + esxi_hypervisor_id}
                     network_values_list.append(standard_network_values)
 
                 elif network_summary['summary'].\
@@ -255,7 +186,6 @@ class DataProcessor(object):
                         'type': 'vmware',
                         'hyper_id': hyper_id,
                         'constraints': 'hyper_host:' + esxi_hypervisor_id,
-                        'connection_uuid': self.vmware_connect_id,
                         'metadata': {
                             'vlan_type':
                                 vmware_dvsnetwork_info.get('vlan_type'),
@@ -274,10 +204,7 @@ class DataProcessor(object):
                            'mem_used': int(memory_used) * 1024 * 1024,
                            'mem_total': host_summary.hardware.memorySize,
                            'type': 'vmware',
-                           'hyper_id': hyper_id,
-                           'connection_uuid': self.vmware_connect_id}
+                           'hyper_id': hyper_id}
 
             host_values_list.append(host_values)
-            # FIXME(Fan Guiju): Merge elements from network_values_list
-            #                   with the same value.
         return host_values_list, network_values_list
