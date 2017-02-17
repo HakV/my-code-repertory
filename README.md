@@ -1,4 +1,3 @@
 # my-code-repertory
-JmilkFan 的个人代码仓库, 用于收集各类优秀的算法/数据结构/业务逻辑代码实现.
 
-2016-09-07 Add Openstack Directory
+2017/02/17 Add call_h3c_cas_restapi.py
