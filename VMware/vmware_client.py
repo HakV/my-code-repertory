@@ -15,6 +15,8 @@ VNC_CONFIG_KEY = 'config.extraConfig["RemoteDisplay.vnc.port"]'
 BIOS_MODE = 'bios'
 EFI_MODE = 'efi'
 
+VNC_PORT_START = 5600
+VNC_PORT_TOTAL = 1000
 
 class VSphereClient(object):
     """Client of vSphere."""
@@ -81,6 +83,48 @@ class VSphereClient(object):
             raise
         return manager_properties_dict
 
+    def _get_datacenter_obj(self, host_ip):
+        datacenters = self._managed_object_get('Datacenter')
+        for datacenter in datacenters.objects:
+            host_folder = self._manager_properties_dict_get(datacenter.obj,
+                                                            'hostFolder')
+            host_folder_obj = host_folder.get('hostFolder')
+            if not host_folder_obj:
+                continue
+
+            hosts = self._manager_properties_dict_get(host_folder_obj,
+                                                      'childEntity')
+            hosts = hosts.get('childEntity')
+            if not hosts:
+                continue
+
+            host_obj = self._get_host_obj(host_ip)
+            cluster_obj = self._get_cluster_obj(host_obj.value)
+            for child in hosts[0]:
+                if child._type == 'ClusterComputeResource' or\
+                        child._type == 'ComputeResource':
+                    if child.value == cluster_obj.value:
+                        return datacenter.obj
+                elif child._type == 'HostSystem':
+                    if child.value == host.value:
+                        return datacenter.obj
+                else:
+                    continue
+        raise vexc.ManagedObjectNotFoundException()
+
+    def _get_cluster_obj(self, host_obj_value):
+        """Get cluster reference via specified host_value from vSphere."""
+        clusters = self._managed_object('ComputeResource')
+
+        for cluster in clusters.objects:
+            hosts = _manager_properties_dict_get(cluster.obj, 'host')
+            if not hosts.get('host'):
+                continue
+            for host in hosts.get('host')[0]:
+                if host.value == host_obj_value:
+                    return cluster.obj
+        raise vexc.ManagedObjectNotFoundException()
+
     def _get_host_obj(self, host_ip):
         """Get host reference via specified host ipaddr from vSphere.
 
@@ -118,33 +162,7 @@ class VSphereClient(object):
                 return vm.obj
         raise vexc.ManagedObjectNotFoundException()
 
-    def _get_cluster_obj(self, host_obj_value):
-        """Get cluster reference via specified host_value from vSphere."""
-        clusters = self._managed_object('ComputeResource')
-
-        for cluster in clusters.objects:
-            hosts = _manager_properties_dict_get(cluster.obj, 'host')
-            if not hosts.get('host'):
-                continue
-            for host in hosts.get('host')[0]:
-                if host.value == host_obj_value:
-                    return cluster.obj
-        raise vexc.ManagedObjectNotFoundException()
-
-    def get_vswitch(self, host_ip):
-        """Get vswitch reference via host ipaddr from vSphere.
-
-        :param host_ip: the host ipaddr.
-        :type: ``str``
-
-        :rtype: ``suds.sudsobject.ArrayOfHostVirtualSwitch``
-        """
-        host_obj = self._get_host_ref(host_ip)
-        vswitchs = self._manager_properties_dict_get(host_obj,
-                                                     'config.network.vswitch')
-        return vswitchs
-
-    def _get_res_pool(self, cluster_obj):
+    def get_res_pool(self, cluster_obj):
         """Get resource pool reference via cluster object from vSphere."""
 
         # Get the root resource pool of the cluster
@@ -152,36 +170,7 @@ class VSphereClient(object):
                                                           'resourcePool')
         return resource_pool
 
-    def get_datacenter_obj(self, host_ip):
-        datacenters = self._managed_object_get('Datacenter')
-        for datacenter in datacenters.objects:
-            host_folder = self._manager_properties_dict_get(datacenter.obj,
-                                                            'hostFolder')
-            host_folder_obj = host_folder.get('hostFolder')
-            if not host_folder_obj:
-                continue
-
-            hosts = self._manager_properties_dict_get(host_folder_obj,
-                                                      'childEntity')
-            hosts = hosts.get('childEntity')
-            if not hosts:
-                continue
-
-            host_obj = self._get_host_obj(host_ip)
-            specific_cluster = self._get_cluster_ref(host_obj.value)
-            for child in hosts[0]:
-                if child._type == 'ClusterComputeResource' or\
-                        child._type == 'ComputeResource':
-                    if child.value == specific_cluster.value:
-                        return datacenter.obj
-                elif child._type == 'HostSystem':
-                    if child.value == host.value:
-                        return datacenter.obj
-                else:
-                    continue
-        raise vexc.ManagedObjectNotFoundException()
-
-    def _get_vmfolder(self, host_ip):
+    def get_vmfolder(self, host_ip):
         if host_ip == self.vsphere_ipaddr:
             # The host belong to vSphere(esxi).
             datacenter = self._managed_object_get('Datacenter')
@@ -191,9 +180,9 @@ class VSphereClient(object):
             return vm_folder.get('vmFolder')
 
         # The host belong to vSphere(vCenter).
-        datacenter = self.get_datacenter_by_host(host_ip)
+        datacenter_obj = self._get_datacenter_obj(host_ip)
         vm_folder = self._manager_properties_dict_get(
-            datacenter,
+            datacenter_obj,
             'vmFolder')
 
         vm_folder = vm_folder.get('vmFolder')
@@ -201,57 +190,40 @@ class VSphereClient(object):
             raise vexc.ManagedObjectNotFoundException()
         return vm_folder
 
-    # NOTE(Fan Guiju)
     def get_datastore_name(self, host_ip):
-        session = self.session
-        # ESXi host
-        if host_ip == self.vcenter_ip:
-            datastore = session.invoke_api(vim_util, 'get_objects',
-                                           session.vim, 'Datastore',
-                                           MAX_SINGLE_CALL)
+        if host_ip == self.vsphere_ipaddr:
+            # The host belong to vSphere(esxi).
+            datastore = self._managed_object_get('Datastore')
             return datastore.objects[0].propSet[0].val
 
-        # Vcenter
-        datastores = session.invoke_api(vim_util, 'get_objects', session.vim,
-                                        'Datastore', MAX_SINGLE_CALL)
-        host = self._get_host_ref(host_ip)
+        # The host belong to vSphere(vCenter).
+        datastores = self._managed_object_get('Datastore')
+        host_obj = self._get_host_obj(host_ip)
         for datastore in datastores.objects:
-            dc_hosts = session.invoke_api(vim_util,
-                                          'get_object_properties_dict',
-                                          session.vim,
-                                          datastore.obj, 'host')
+            dc_hosts = self._manager_properties_dict_get(
+                datastore.obj, 'host')
             dc_hosts = dc_hosts.get('host')
-
             if not dc_hosts:
                 continue
 
             for dc_host in dc_hosts[0]:
-                if host.value == dc_host.key.value and \
+                if host_obj.value == dc_host.key.value and \
                         datastore.propSet[0].val.split('_', 1)[0] != 'Drp':
-                    free_space = session.invoke_api(vim_util,
-                                                    "get_object_property",
-                                                    session.vim,
-                                                    datastore.obj,
-                                                    "summary").freeSpace
+                    free_space = self._manager_properties_dict_get(
+                        datastore.obj, 'summary').freeSpace
                     if free_space:
                         return datastore.propSet[0].val
-
-        LOG.error(_LE("Datastore not found in host: %s!") % host_ip)
         raise exception.NoDataStore(host=host_ip)
 
     def get_vdisk_info(self, vm_name):
         """Get virtual disk information fot vmware instance."""
 
-        session = self.session
-        vms = session.invoke_api(vim_util, 'get_objects',
-                                 session.vim, 'VirtualMachine',
-                                 MAX_SINGLE_CALL)
+        vms = self._managed_object_get('VirtualMachine')
         for vm in vms[0]:
             if vm.propSet[0].val != vm_name:
                 continue
-            vm_extraconf = session.invoke_api(
-                vim_util, 'get_object_properties_dict',
-                session.vim, vm.obj, 'config.extraConfig')
+            vm_extraconf = self._manager_properties_dict_get(
+                vm.obj, 'config.extraConfig')
 
             vdisk_driver = []
             for option in vm_extraconf['config.extraConfig'][0]:
@@ -265,8 +237,216 @@ class VSphereClient(object):
                     vdisk_driver.append('ide')
             return vdisk_driver
 
+    def get_host_iqn(self, host_ip):
+        """Return the host iSCSI IQN."""
+        host_obj = self._get_host_obj(host_ip)
+        hbas = self._manager_properties_dict_get(
+            host_obj,
+            'config.storageDevice.hostBusAdapter')
 
-    def _get_add_vswitch_port_group_spec(self, client_factory, vswitch_name,
+        # Meaning there are no host bus adapters on the host
+        if hbas is None:
+            return
+
+        host_hbas = hbas.HostHostBusAdapter
+        if not host_hbas:
+            return
+
+        for hba in host_hbas:
+            if hba.__class__.__name__ == 'HostInternetScsiHba':
+                return hba.iScsiName
+
+    def get_host_initiator(self, host_ip):
+        host_obj = self._get_host_obj(host_ip)
+        host_storage_device = self._manager_properties_dict_get(
+            host_obj, 'config.storageDevice.hostBusAdapter')
+
+        if host_storage_device is None or \
+                host_storage_device["config.storageDevice.hostBusAdapter"].\
+                HostHostBusAdapter is None:
+            initiator_name = None
+            initiator_protocol = None
+
+        host_bus_adapters = host_storage_device[
+            "config.storageDevice.hostBusAdapter"].HostHostBusAdapter
+
+        hba_iscsi = []
+        for hba in host_bus_adapters:
+            if hba.__class__.__name__ == 'HostInternetScsiHba':
+                hba_iscsi.append(hba)
+        # FIXME(Fan Guiju): Use many kinds of protocols.
+        if not hba_iscsi or not len(hba_iscsi):
+            initiator_protocol = 'ISCSI'
+            initiator_name = None
+        else:
+            initiator_protocol = 'ISCSI'
+            initiator_name = hba_iscsi[0].iScsiName
+        return (initiator_protocol, initiator_name)
+
+    def get_host_info(self, host_obj):
+        host_values_list = []
+
+        host_name = host_obj.value
+        # Get esxi host summary
+        host_summary = self._manager_properties_dict_get(
+            host_obj, 'summary').get('summary')
+
+        # Get the sizes of esxi hypervisor memory
+        if not host_summary.quickStats or\
+                not host_summary.quickStats.overallMemoryUsage:
+            memory_used = None
+        else:
+            memory_used = host_summary.quickStats.overallMemoryUsage
+
+        # Get the esxi hardware uuid
+        host_uuid = host_summary.hardware.uuid
+
+        # Get the esxi host whether in vcenter and display_name
+        # If YES: hostname equal to host ipaddr
+        # If NO: hostname equal to FQDN,
+        #        need to get the host ipaddr from vmware connect.
+        try:
+            int(str(host_summary.config.name).split('.')[0])
+            host_ipaddr = host_display_name = host_summary.config.name
+            whether_is_vcenter = True
+        except ValueError:
+            vmware_connect_info = self.core_api.hyper_connection_get(
+                self.context,
+                self.vmware_connect_id)
+            auth_url = vmware_connect_info.get('auth_url')
+            # FIXME(Fan Guiju): Convert host name to ipaddress
+            host_ipaddr = urlparse(auth_url).hostname
+            host_display_name = host_summary.config.name
+            whether_is_vcenter = False
+
+        host_info = {'display_name': host_display_name,
+                     'name': host_name,
+                     'ip': host_ipaddr,
+                     'cores': host_summary.hardware.numCpuCores,
+                     'mem_used': int(memory_used) * 1024 * 1024,
+                     'mem_total': host_summary.hardware.memorySize,
+                     'host_uuid': host_uuid,
+                     'is_vcenter': whether_is_vcenter}
+        return host_info
+
+    def get_used_vnc_port(self):
+
+        # FIXME(Fan Guiju): We should get used vnc port for host,
+        # but not vCenter, see bug #1256944
+        used_vnc_ports = set()
+        vms = self._managed_object_get('VirtualMachine')
+
+        while vms:
+            for vm_obj in vms.objects:
+                if not hasattr(obj, 'propSet'):
+                    continue
+                dynamic_prop = obj.propSet[0]
+                option_value = dynamic_prop.val
+                vnc_port = option_value.value
+                used_vnc_ports.add(int(vnc_port))
+            self._managed_object_get(vms,
+                                     action='continue_retrieval')
+        return used_vnc_ports
+
+    def get_vnc_port(self):
+        # TODO(Fan Guiju): Setup the number of port with config file
+        min_port = VNC_PORT_START
+        port_total = VNC_PORT_TOTAL
+        used_vnc_ports = self.get_used_vnc_port()
+        max_port = min_port + port_total
+        for port in range(min_port, max_port+1):
+            if port not in used_vnc_ports:
+                return port
+        raise
+
+    def get_vswitch(self, host_ip):
+        """Get vswitch reference via host ipaddr from vSphere.
+
+        :param host_ip: the host ipaddr.
+        :type: ``str``
+
+        :rtype: ``suds.sudsobject.ArrayOfHostVirtualSwitch``
+        """
+        host_obj = self._get_host_obj(host_ip)
+        vswitchs = self._manager_properties_dict_get(host_obj,
+                                                     'config.network.vswitch')
+        return vswitchs
+
+    def get_svsnetwork_vlanid(self, host_obj, port_group_name):
+        # Get the vlan_id with port group.
+        port_group = self._manager_properties_dict_get(
+            host_obj,
+            'config.network.portgroup')
+        if not port_group:
+            vlan_id = 'None'
+        host_port_groups = port_group['config.network.portgroup'].\
+            HostPortGroup
+        for pg in host_port_groups:
+            if pg.spec.name == port_group_name:
+                vlan_id = pg.spec.vlanId
+        return vlan_id
+
+    def get_dvsnetwork_info(self, network_summary, dvpg_cfg):
+        dvspg_key = network_summary['summary'].network.value
+
+        # Get overall networks
+        dvpgs = self._managed_object_get('DistributedVirtualPortgroup')
+        for dvpg in dvpgs.objects:
+            if dvpg_cfg['config'].key != dvspg_key:
+                continue
+
+            vdvs_config = self._manager_properties_dict_get(
+                dvpg_cfg['config'].distributedVirtualSwitch, 'config')
+
+            dvs_uuid = vdvs_config['config'].uuid
+            dvspg_key = dvpg_cfg['config'].key
+            dvspg_name = dvpg_cfg['config'].name
+
+            vlan = dvpg_cfg['config'].defaultPortConfig.vlan
+            vlan_type = vlan_id = None
+            if str(type(vlan)) == \
+                    "<class 'suds.sudsobject."\
+                    "VmwareDistributedVirtualSwitchTrunkVlanSpec'>":
+                vlan_type = 'TrunkVlan'
+                vlan_id = ''.join(['[', str(vlan.vlanId[0].start), ',',
+                                   str(vlan.vlanId[0].end), ']'])
+
+            elif str(type(vlan)) == \
+                    "<class 'suds.sudsobject."\
+                    "VmwareDistributedVirtualSwitchVlanIdSpec'>":
+                vlan_type = 'VlanId'
+                vlan_id = vlan.vlanId
+
+            elif str(type(vlan)) == \
+                    "<class 'suds.sudsobject."\
+                    "VmwareDistributedVirtualSwitchPvlanSpec'>":
+                vlan_type = 'Pvlan'
+                vlan_id = vlan.pvlanId
+
+            dvsnetwork_info = {
+                'dvspg_name': dvspg_name,
+                'dvspg_key': dvspg_key,
+                'dvs_uuid': dvs_uuid,
+                'vlan_type': vlan_type,
+                'vlan_id': vlan_id)
+            return dvsnetwork_info
+
+    def create_vnc_config_spec(self, client_factory):
+        """Builds the vnc config spec."""
+
+        port = self.get_vnc_port()
+        opt_enabled = client_factory.create('ns0:OptionValue')
+        opt_enabled.key = "RemoteDisplay.vnc.enabled"
+        opt_enabled.value = "true"
+        opt_port = client_factory.create('ns0:OptionValue')
+        opt_port.key = "RemoteDisplay.vnc.port"
+        opt_port.value = port
+        opt_keymap = client_factory.create('ns0:OptionValue')
+        opt_keymap.key = "RemoteDisplay.vnc.keyMap"
+        opt_keymap.value = 'en-us'
+        return [opt_enabled, opt_port, opt_keymap]
+
+    def create_vswitch_port_group_config_spec(self, client_factory, vswitch_name,
                                          port_group_name, vlan_id):
         # Add spec to the virtual switch port.
         vswitch_port_group_spec = client_factory.\
@@ -281,36 +461,83 @@ class VSphereClient(object):
         nicteaming = client_factory.create('ns0:HostNicTeamingPolicy')
         nicteaming.notifySwitches = True
         policy.nicTeaming = nicteaming
-
         vswitch_port_group_spec.policy = policy
+
         return vswitch_port_group_spec
 
-    def _convert_vif_model(self, name):
-        # Converts standard VIF_MODEL types to the internal VMware ones.
-        if name == network_model.VIF_MODEL_E1000:
-            return 'VirtualE1000'
-        if name == network_model.VIF_MODEL_E1000E:
-            return 'VirtualE1000e'
-        if name == network_model.VIF_MODEL_PCNET:
-            return 'VirtualPCNet32'
-        if name == network_model.VIF_MODEL_SRIOV:
-            return 'VirtualSriovEthernetCard'
-        if name == network_model.VIF_MODEL_VMXNET:
-            return 'VirtualVmxnet'
-        if name == network_model.VIF_MODEL_VMXNET3:
-            return 'VirtualVmxnet3'
-        else:
-            msg = _('%s is not supported.') % name
-            raise exception.Invalid(msg)
-        return name
+    def create_vm_config_spec(self, name, host_ip, flavor, vif_infos,
+                            firmware=BIOS_MODE):
+        """Add spec to create virtualmachine"""
+        datastore_name = self.get_datastore_name(host_ip)
+        client_factory = self.session.vim.client.factory
+        config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
 
-    def _create_vif_spec(self, client_factory, vif_info):
+        instance_uuid = str(uuid.uuid4())
+        data_store_name = datastore_name
+
+        config_spec.name = name
+        config_spec.guestId = 'otherGuest'
+        config_spec.instanceUuid = instance_uuid
+        config_spec.uuid = instance_uuid
+        vm_file_info = client_factory.create('ns0:VirtualMachineFileInfo')
+        vm_file_info.vmPathName = "[" + data_store_name + "]"
+        config_spec.files = vm_file_info
+
+        tools_info = client_factory.create('ns0:ToolsConfigInfo')
+        tools_info.afterPowerOn = True
+        tools_info.afterResume = True
+        tools_info.beforeGuestStandby = True
+        tools_info.beforeGuestShutdown = True
+        tools_info.beforeGuestReboot = True
+        config_spec.tools = tools_info
+
+        config_spec.numCPUs = int(flavor.get('cpus'))
+        config_spec.numCoresPerSocket = int(flavor.get('cores'))
+        config_spec.memoryMB = int(flavor.get('memory_mb'))
+
+        devices = []
+        for vif_info in vif_infos:
+            vif_spec = self.create_vif_config_spec(client_factory, vif_info)
+            devices.append(vif_spec)
+
+        extra_config = []
+        opt = client_factory.create('ns0:OptionValue')
+        opt.key = "nvp.vm-uuid"
+        opt.value = instance_uuid
+        extra_config.append(opt)
+        if firmware == EFI_MODE:
+            firmware_opt = client_factory.create('ns0:OptionValue')
+            firmware_opt.key = 'firmware'
+            firmware_opt.value = firmware
+            extra_config.append(firmware_opt)
+
+        vnc_opts = self.create_vnc_config_spec(client_factory)
+        extra_config += vnc_opts
+        config_spec.extraConfig = extra_config
+
+        # disk config
+        isci_disk_spec = self.allocate_controller_key_and_unit_number(
+            client_factory)
+
+        devices.append(isci_disk_spec)
+        config_spec.deviceChange = devices
+
+        return config_spec, vnc_opts
+
+    def create_iface_id_config_spec(self, client_factory, iface_id, port_index):
+        opt = client_factory.create('ns0:OptionValue')
+        opt.key = "nvp.iface-id.%d" % port_index
+        opt.value = iface_id
+        return opt
+
+    def create_vif_config_spec(self, client_factory, vif_info):
+        """Create virtual network interface spec."""
         # Builds a config spec for network adapter.
         network_spec = client_factory.create('ns0:VirtualDeviceConfigSpec')
         network_spec.operation = "add"
 
         # Keep compatible with other Hyper vif model parameter.
-        vif_info['vif_model'] = self._convert_vif_model(vif_info['vif_model'])
+        vif_info['vif_model'] = self.convert_vif_model(vif_info['vif_model'])
         vif = 'ns0:' + vif_info['vif_model']
         net_device = client_factory.create(vif)
 
@@ -352,199 +579,34 @@ class VSphereClient(object):
         network_spec.device = net_device
         return network_spec
 
-    def _iface_id_option(self, client_factory, iface_id, port_index):
-        opt = client_factory.create('ns0:OptionValue')
-        opt.key = "nvp.iface-id.%d" % port_index
-        opt.value = iface_id
-        return opt
-
-    def _config_change(self, name, flavor, vif_infos, set_vnc=True):
-        client_factory = self.session.vim.client.factory
-        config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
-
-        config_spec.name = name
-
-        config_spec.numCPUs = int(flavor.get('cpus'))
-        config_spec.numCoresPerSocket = int(flavor.get('cores'))
-        config_spec.memoryMB = int(flavor.get('memory_mb'))
-
-        devices = []
-        count = 0
-        extra_config = []
-        for vif_info in vif_infos:
-            vif_info['iface_id'] = count
-            vif_spec = self._create_vif_spec(client_factory, vif_info)
-            devices.append(vif_spec)
-            extra_config.append(self._iface_id_option(client_factory,
-                                                      vif_info['iface_id'],
-                                                      count))
-            count += 1
-        config_spec.deviceChange = devices
-
-        if set_vnc:
-            vnc_opts = self._get_vnc_config_spec(client_factory)
-            extra_config += vnc_opts
-        else:
-            vnc_opts = None
-        config_spec.extraConfig = extra_config
-
-        return config_spec, vnc_opts
-
-    def _get_vm_create_spec(self, name, host_ip, flavor, vif_infos,
-                            firmware=BIOS_MODE):
-        """Add spec to create virtualmachine"""
-        datastore_name = self.get_datastore_name(host_ip)
-        client_factory = self.session.vim.client.factory
-        config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
-
-        instance_uuid = str(uuid.uuid4())
-        data_store_name = datastore_name
-
-        config_spec.name = name
-        config_spec.guestId = 'otherGuest'
-        config_spec.instanceUuid = instance_uuid
-        config_spec.uuid = instance_uuid
-        vm_file_info = client_factory.create('ns0:VirtualMachineFileInfo')
-        vm_file_info.vmPathName = "[" + data_store_name + "]"
-        config_spec.files = vm_file_info
-
-        tools_info = client_factory.create('ns0:ToolsConfigInfo')
-        tools_info.afterPowerOn = True
-        tools_info.afterResume = True
-        tools_info.beforeGuestStandby = True
-        tools_info.beforeGuestShutdown = True
-        tools_info.beforeGuestReboot = True
-        config_spec.tools = tools_info
-
-        config_spec.numCPUs = int(flavor.get('cpus'))
-        config_spec.numCoresPerSocket = int(flavor.get('cores'))
-        config_spec.memoryMB = int(flavor.get('memory_mb'))
-
-        devices = []
-        for vif_info in vif_infos:
-            vif_spec = self._create_vif_spec(client_factory, vif_info)
-            devices.append(vif_spec)
-
-        extra_config = []
-        opt = client_factory.create('ns0:OptionValue')
-        opt.key = "nvp.vm-uuid"
-        opt.value = instance_uuid
-        extra_config.append(opt)
-        if firmware == EFI_MODE:
-            firmware_opt = client_factory.create('ns0:OptionValue')
-            firmware_opt.key = 'firmware'
-            firmware_opt.value = firmware
-            extra_config.append(firmware_opt)
-
-        vnc_opts = self._get_vnc_config_spec(client_factory)
-        extra_config += vnc_opts
-        config_spec.extraConfig = extra_config
-
-        # disk config
-        isci_disk_spec = self.allocate_controller_key_and_unit_number(
-            client_factory)
-
-        devices.append(isci_disk_spec)
-        config_spec.deviceChange = devices
-
-        return config_spec, vnc_opts
-
-
     def create_port_group(self, pg_name, vswitch_name, host_ip, vlan_id=0):
         """Creates a port group on specific host."""
         session = self.session
         client_factory = session.vim.client.factory
         # Make a spec for creating
-        add_prt_grp_spec = self._get_add_vswitch_port_group_spec(
+        port_group_spec = self.get_vswitch_port_group_spec(
             client_factory, vswitch_name, pg_name, vlan_id)
         # Get host_mor for getting network_system_mor
-        host_mor = self._get_host_ref(host_ip)
+        host_obj = self._get_host_obj(host_ip)
 
-        network_system_mor = session.invoke_api(vim_util,
-                                                "get_object_property",
-                                                session.vim,
-                                                host_mor,
-                                                "configManager.networkSystem")
-        LOG.info(_LI("Creating Port Group with name %(pg)s on the ESXi "
-                     "host: %(host)s"), {'pg': pg_name, 'host': host_ip})
+        network_system = _manager_properties_dict_get(
+            host_obj, 'configManager.networkSystem')
         try:
+            # Execute add port group action for vSphere.
             session.invoke_api(session.vim,
-                               "AddPortGroup", network_system_mor,
-                               portgrp=add_prt_grp_spec)
+                               "AddPortGroup",
+                               network_system,
+                               portgrp=port_group_spec)
         except vexc.AlreadyExistsException:
             # There can be a race condition when two instances try
             # adding port groups at the same time. One succeeds, then
             # the other one will get an exception. Since we are
             # concerned with the port group being created, which is done
             # by the other call, we can ignore the exception.
-            LOG.error(_LE("Port Group %(pg)s already exist in host: "
-                          "%(host)s."), {'pg': pg_name, 'host': host_ip})
-        LOG.info(_LI("Created Port Group with name %(pg)s on the ESXi "
-                     "host: %(host)s"), {'pg': pg_name, 'host': host_ip})
-
-    def remove_port_group(self, pg_name, host_ip):
-        """Remove a port group on the host system"""
-        # FIXME(hequn): we need to know the type of pg_name, send string type
-        #               to oslo_vmware will cause error.
-        session = self.session
-        host_mor = self._get_host_ref(host_ip)
-        network_system_mor = session.invoke_api(vim_util,
-                                                "get_object_property",
-                                                session.vim,
-                                                host_mor,
-                                                "configManager.networkSystem")
-
-        session.invoke_api(session.vim, "RemovePortGroup",
-                           network_system_mor, pg_name)
-
-    def vm_action(self, vm_name, action):
-        """Virtual machine action
-
-        :param vm_name: the name of vm
-        :type: ``str``
-
-        :param action: the operation of vm, it's value should be selected in
-                       restart, power_on and power_off
-        :type: ``str``
-
-        """
-        session = self.session
-        vm_ref = self._get_vm_ref(vm_name)
-        if action == 'restart':
-            poweroff_task = session.invoke_api(session.vim,
-                                               "PowerOffVM_Task", vm_ref)
-            session.wait_for_task(poweroff_task)
-            poweron_task = session.invoke_api(session.vim,
-                                              "PowerOnVM_Task", vm_ref)
-            session.wait_for_task(poweron_task)
-            return
-
-        elif action == 'power_on':
-            poweron_task = session.invoke_api(session.vim,
-                                              "PowerOnVM_Task", vm_ref)
-            session.wait_for_task(poweron_task)
-            return
-
-        elif action == 'power_off':
-            poweroff_task = session.invoke_api(session.vim,
-                                               "PowerOffVM_Task", vm_ref)
-            session.wait_for_task(poweroff_task)
-            return
-
-        elif action == 'destroy':
-            if self.vm_state(vm_name) == "poweredOn":
-                self.vm_action(vm_name, 'power_off')
-
-            destroy_task = session.invoke_api(session.vim,
-                                              "Destroy_Task", vm_ref)
-            session.wait_for_task(destroy_task)
-            return
-
-        else:
-            raise Exception("Virtual machine method %s not found!" % action)
+            raise
 
     def vm_create(self, name, host_ip, flavor, vif_infos, firmware=BIOS_MODE):
-        """Virtual machine create
+        """Create virtual machine.
 
         :param name: the name of vm
         :type: ``str``
@@ -560,76 +622,181 @@ class VSphereClient(object):
 
         """
         session = self.session
-        host_ref = self._get_host_ref(host_ip)
-        cluster = self._get_cluster_ref(host_ref.value)
-        config_spec, vnc_opts = self._get_vm_create_spec(name,
-                                                         host_ip,
-                                                         flavor,
-                                                         vif_infos,
-                                                         firmware=firmware)
-        vmfolder = self._get_vmfolder_ref(host_ip)
-        res_pool_ref = self._get_res_pool_ref(cluster)
+        host_obj = self._get_host_obj(host_ip)
+        cluster_obj = self._get_cluster_obj(host_obj.value)
+        config_spec, vnc_opts = self.get_vm_create_spec(name,
+                                                        host_ip,
+                                                        flavor,
+                                                        vif_infos,
+                                                        firmware=firmware)
+        vm_folder = self.get_vmfolder(host_ip)
+        res_pool = self.get_res_pool(cluster_obj)
 
         vm_create_task = session.invoke_api(session.vim,
                                             "CreateVM_Task",
-                                            vmfolder,
+                                            vm_folder,
                                             config=config_spec,
-                                            pool=res_pool_ref,
-                                            host=host_ref)
+                                            pool=res_pool,
+                                            host=host_obj)
 
         task_info = session.wait_for_task(vm_create_task)
-        LOG.info(_LI("Created VM on the ESX host: %s") % host_ip)
         return task_info.result, config_spec.instanceUuid, vnc_opts
 
-    def get_host_iqn(self, host_ip):
-        """Return the host iSCSI IQN."""
-        host_mor = self._get_host_ref(host_ip)
-        hbas_ret = self.session.invoke_api(vim_util,
-                                           "get_object_property",
-                                           self.session.vim,
-                                           host_mor,
-                                           "config.storageDevice."
-                                           "hostBusAdapter")
+    def vm_power_action(self, vm_name, action):
+        """Virtual machine action
 
-        # Meaning there are no host bus adapters on the host
-        if hbas_ret is None:
+        :param vm_name: the name of vm
+        :type: ``str``
+
+        :param action: the operation of vm, it's value should be selected in
+                       restart, power_on and power_off
+        :type: ``str``
+
+        """
+        session = self.session
+        vm_obj = self._get_vm_obj(vm_name)
+
+        if action == 'restart':
+            poweroff_task = session.invoke_api(session.vim,
+                                               "PowerOffVM_Task", vm_obj)
+            session.wait_for_task(poweroff_task)
+
+            poweron_task = session.invoke_api(session.vim,
+                                              "PowerOnVM_Task", vm_obj)
+            session.wait_for_task(poweron_task)
             return
-        host_hbas = hbas_ret.HostHostBusAdapter
-        if not host_hbas:
+
+        elif action == 'power_on':
+            poweron_task = session.invoke_api(session.vim,
+                                              "PowerOnVM_Task", vm_obj)
+            session.wait_for_task(poweron_task)
             return
-        for hba in host_hbas:
-            if hba.__class__.__name__ == 'HostInternetScsiHba':
-                return hba.iScsiName
+
+        elif action == 'power_off':
+            poweroff_task = session.invoke_api(session.vim,
+                                               "PowerOffVM_Task", vm_obj)
+            session.wait_for_task(poweroff_task)
+            return
+
+        elif action == 'destroy':
+            if self.vm_state(vm_name) == "poweredOn":
+                self.vm_action(vm_name, 'power_off')
+
+            destroy_task = session.invoke_api(session.vim,
+                                              "Destroy_Task", vm_obj)
+            session.wait_for_task(destroy_task)
+            return
+
+        else:
+            raise Exception("Virtual machine method %s not found!" % action)
 
     def vm_state(self, vm_name):
         """Get vm state"""
-        session = self.session
-        vm_ref = self._get_vm_ref(vm_name)
-        vm_info = session.invoke_api(vim_util, 'get_object_properties_dict',
-                                     session.vim, vm_ref, 'summary')
+        vm_obj = self._get_vm_obj(vm_name)
+        vm_info = self._manager_properties_dict_get(vm_obj, 'summary')
         vm_summary = vm_info.get('summary')
 
         if not vm_summary:
             return
-
         return vm_summary.runtime.powerState
 
-    def vm_config(self, vm_name, host_ip, flavor, vif_infos, set_vnc=True):
+    def vm_reconfig(self, vm_name, host_ip, flavor, vif_infos, set_vnc=True):
         """Reconfigure a VM according to the config spec."""
         session = self.session
-        vm_ref = self._get_vm_ref(vm_name)
-        config_spec, vnc_opts = self._config_change(vm_name,
-                                                    flavor,
-                                                    vif_infos,
-                                                    set_vnc=set_vnc)
+        vm_obj = self._get_vm_obj(vm_name)
+        config_spec, vnc_opts = self.change_vm_config(vm_name,
+                                                      flavor,
+                                                      vif_infos,
+                                                      set_vnc=set_vnc)
         reconfig_task = session.invoke_api(session.vim,
-                                           "ReconfigVM_Task", vm_ref,
+                                           "ReconfigVM_Task",
+                                           vm_obj,
                                            spec=config_spec)
         session.wait_for_task(reconfig_task)
-        LOG.info(_LI("Config VM on the ESX host: %s") % host_ip)
         return vm_ref, vnc_opts
 
-    def allocate_controller_key_and_unit_number(self, client_factory,
+    def remove_port_group(self, pg_name, host_ip):
+        """Remove a port group on the host system"""
+        session = self.session
+        host_obj = self._get_host_obj(host_ip)
+        network_system = _manager_properties_dict_get(
+            host_obj, 'configManager.networkSystem')
+        try:
+            session.invoke_api(session.vim,
+                               "RemovePortGroup",
+                               network_system,
+                               pg_name)
+        except Exception:
+            raise
+
+    def convert_vif_model(self, name):
+        # Converts standard VIF_MODEL types to the internal VMware ones.
+        if name == VIF_MODEL_E1000:
+            return 'VirtualE1000'
+        if name == VIF_MODEL_E1000E:
+            return 'VirtualE1000e'
+        if name == VIF_MODEL_PCNET:
+            return 'VirtualPCNet32'
+        if name == VIF_MODEL_SRIOV:
+            return 'VirtualSriovEthernetCard'
+        if name == VIF_MODEL_VMXNET:
+            return 'VirtualVmxnet'
+        if name == VIF_MODEL_VMXNET3:
+            return 'VirtualVmxnet3'
+        else:
+            raise
+        return name
+
+    def change_vm_config(self, name, flavor, vif_infos, set_vnc=True):
+        client_factory = self.session.vim.client.factory
+        config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+
+        config_spec.name = name
+
+        config_spec.numCPUs = int(flavor.get('cpus'))
+        config_spec.numCoresPerSocket = int(flavor.get('cores'))
+        config_spec.memoryMB = int(flavor.get('memory_mb'))
+
+        devices = []
+        count = 0
+        extra_config = []
+        for vif_info in vif_infos:
+            vif_info['iface_id'] = count
+            vif_spec = self.create_vif_config_spec(client_factory, vif_info)
+            devices.append(vif_spec)
+            extra_config.append(self.create_iface_id_config_spec(
+                client_factory,
+                vif_info['iface_id'],
+                count))
+            count += 1
+        config_spec.deviceChange = devices
+
+        if set_vnc:
+            vnc_opts = self.create_vnc_config_spec(client_factory)
+            extra_config += vnc_opts
+        else:
+            vnc_opts = None
+        config_spec.extraConfig = extra_config
+
+        return config_spec, vnc_opts
+
+    def ensure_network_obj_is_uplink(self, network_obj, is_vcenter):
+        network_summary = self._manager_properties_dict_get(
+            network_obj, 'summary')
+        if network_summary['summary'].\
+                network._type == 'DistributedVirtualPortgroup' \
+                and is_vcenter:
+            dvpg_cfg = self._manager_properties_dict_get(
+                network_obj,
+                'config')
+            # Virtual machine can't be use the uplink_portgroup
+            if dvpg_cfg['config'].defaultPortConfig.\
+                    uplinkTeamingPolicy.uplinkPortOrder.inherited:
+                return True
+            return False
+
+    def allocate_controller_key_and_unit_number(self,
+                                                client_factory,
                                                 adapter_type='lsiLogic'):
         """This function inspects the current set of hardware devices and
 
@@ -638,7 +805,8 @@ class VSphereClient(object):
         a new virtual disk to adapter with the given adapter_type.
         """
 
-        def create_controller_spec(client_factory, key,
+        def create_controller_spec(client_factory,
+                                   key,
                                    adapter_type='lsiLogic',
                                    bus_number=0):
             """Builds a Config Spec for the LSI or Bus Logic Controller's
@@ -679,84 +847,3 @@ class VSphereClient(object):
             client_factory, controller_key,
             adapter_type, bus_number)
         return controller_spec
-
-    def _get_used_vnc_port(self):
-        # FIXME(Li Xiepng): We should get used vnc port for host,
-        # but not vCenter, see bug #1256944
-        used_vnc_ports = set()
-        session = self.session
-        vms = session.invoke_api(vutil, 'get_objects', session.vim,
-                                 'VirtualMachine', [VNC_CONFIG_KEY])
-        while vms:
-            for obj in vms.objects:
-                if not hasattr(obj, 'propSet'):
-                    continue
-                dynamic_prop = obj.propSet[0]
-                option_value = dynamic_prop.val
-                vnc_port = option_value.value
-                used_vnc_ports.add(int(vnc_port))
-            vms = session.invoke_api(vim_util,
-                                     'continue_retrieval',
-                                     session.vim,
-                                     vms)
-        return used_vnc_ports
-
-    def _get_vnc_port(self):
-        # TODO(Fan Guiju): Setup the number of port with config file
-        min_port = CONF.vmware.vnc_port_start
-        port_total = CONF.vmware.vnc_port_total
-        used_vnc_ports = self._get_used_vnc_port()
-        max_port = min_port + port_total
-        for port in range(min_port, max_port):
-            if port not in used_vnc_ports:
-                return port
-
-        exception.ConsolePortRangeExhausted(min_port=min_port,
-                                            max_port=max_port)
-
-    def _get_vnc_config_spec(self, client_factory):
-        """Builds the vnc config spec."""
-        port = self._get_vnc_port()
-        opt_enabled = client_factory.create('ns0:OptionValue')
-        opt_enabled.key = "RemoteDisplay.vnc.enabled"
-        opt_enabled.value = "true"
-        opt_port = client_factory.create('ns0:OptionValue')
-        opt_port.key = "RemoteDisplay.vnc.port"
-        opt_port.value = port
-        opt_keymap = client_factory.create('ns0:OptionValue')
-        opt_keymap.key = "RemoteDisplay.vnc.keyMap"
-        opt_keymap.value = 'en-us'
-
-        return [opt_enabled, opt_port, opt_keymap]
-
-    def get_host_initiator(self, host_ip):
-        session = self.session
-        host = self._get_host_ref(host_ip)
-        host_storage_device = session.invoke_api(
-            vim_util, 'get_object_properties_dict',
-            session.vim, host,
-            'config.storageDevice.hostBusAdapter')
-
-        if host_storage_device is None or \
-                host_storage_device["config.storageDevice.hostBusAdapter"].\
-                HostHostBusAdapter is None:
-            initiator_name = None
-            initiator_protocol = None
-
-        host_bus_adapters = host_storage_device[
-            "config.storageDevice.hostBusAdapter"].HostHostBusAdapter
-
-        hba_iscsi = []
-        for hba in host_bus_adapters:
-            if hba.__class__.__name__ == 'HostInternetScsiHba':
-                hba_iscsi.append(hba)
-        # FIXME(Fan Guiju): Use many kinds of protocols.
-        if not hba_iscsi or not len(hba_iscsi):
-            initiator_protocol = 'ISCSI'
-            initiator_name = None
-        else:
-            initiator_protocol = 'ISCSI'
-            initiator_name = hba_iscsi[0].iScsiName
-
-        return (initiator_protocol, initiator_name)
-
