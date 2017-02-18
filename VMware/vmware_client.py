@@ -18,6 +18,19 @@ EFI_MODE = 'efi'
 VNC_PORT_START = 5600
 VNC_PORT_TOTAL = 1000
 
+VIF_MODEL_VIRTIO = 'virtio'
+VIF_MODEL_NE2K_PCI = 'ne2k_pci'
+VIF_MODEL_PCNET = 'pcnet'
+VIF_MODEL_RTL8139 = 'rtl8139'
+VIF_MODEL_E1000 = 'e1000'
+VIF_MODEL_E1000E = 'e1000e'
+VIF_MODEL_NETFRONT = 'netfront'
+VIF_MODEL_SPAPR_VLAN = 'spapr-vlan'
+VIF_MODEL_SRIOV = 'sriov'
+VIF_MODEL_VMXNET = 'vmxnet'
+VIF_MODEL_VMXNET3 = 'vmxnet3'
+
+
 class VSphereClient(object):
     """Client of vSphere."""
 
