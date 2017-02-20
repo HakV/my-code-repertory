@@ -6,6 +6,7 @@ from time import sleep
 
 _SESSION = None
 TIMEOUT = 60
+
 H3CCAS_RES_MAP = {
     'auth': '/cas/spring_check',
     'hosts': '/cas/casrs/host',
@@ -18,7 +19,12 @@ H3CCAS_RES_MAP = {
     'server': '/cas/casrs/vm/{server_id}',
     'start_server': '/cas/domain/{server_id}/start',
     'delete_server': '/cas/domain/{server_id}/1',
-    'vnc': '/cas/casrs/vmvnc/vnc/{server_id}'}
+    'vnc': '/cas/casrs/vmvnc/vnc/{server_id}',
+    'storage_pools': '/cas/casrs/storage/pool?hostId={host_id}',
+    'create_storage_pool': '/cas/storage/pool/add',
+    'start_storage_pool':
+        '/cas/storage/host/{host_id}/storagepool/{stor_pool_name}/start',
+    'delete_storage_pool': '/cas/storage/host/storagepool'}
 
 
 class H3cCasClient(object):
@@ -144,7 +150,46 @@ class H3cCasClient(object):
             H3CCAS_RES_MAP['share_storages'].format(host_id=host_id)])
         return self._rest_call(req_url, method='get')
 
-    def create_server(self, host_id, vswitch_id, boot_mode=None):
+    def storage_pools_get_all(self, host_id):
+        req_url = ''.join([
+            self.url,
+            H3CCAS_RES_MAP['storage_pools'].format(host_id=host_id)])
+        return self._rest_call(req_url, method='get')
+
+    def create_storage_pool(self):
+        storage_pool_body = {
+            'fsName': 'iqn.2013-09.com.prophetstor:flexvisor.53087136ddfa',
+            'hostId': '1',
+            'name': 'drp-iscsi',
+            'path': '/dev/disk/by-path',
+            'rsFsLunInfoList': [],
+            'srcHost': '200.21.110.3',
+            'srcPath': 'iqn.2013-09.com.prophetstor:flexvisor.53087136ddfa',
+            'title': 'drp-scsi',
+            'type': 'iscsi'}
+
+        req_url = ''.join([
+            self.url,
+            H3CCAS_RES_MAP['create_storage_pool']])
+        return self._rest_call(req_url, method='post', data=storage_pool_body)
+
+    def start_storage_pool(self, host_id, stor_pool_name):
+        req_url = ''.join([
+            self.url,
+            H3CCAS_RES_MAP['start_storage_pool'].format(
+                host_id=host_id,
+                stor_pool_name=stor_pool_name)])
+        return self._rest_call(req_url, method='put')
+
+    def delete_storage_pool(self, host_id, stor_pool_name):
+        req_url = ''.join([
+            self.url,
+            H3CCAS_RES_MAP['delete_storage_pool']])
+        req_params = {'hostId': host_id, 'poolName': stor_pool_name}
+        return self._rest_call(req_url, method='delete', params=req_params)
+
+    def create_server(self, host_id, vswitch_id):
+        """Create server via block device."""
 
         server_body = {
             'autoMem': 0,
@@ -161,7 +206,8 @@ class H3cCasClient(object):
             'cpuSocket': 2,
             'description': 'Just test create via REST API',
             'devList': [],
-            'drive': 'cirrus',
+            # 'drive': 'cirrus',
+            'drive': 'vga',
             'hostId': host_id,
             'hostPoolId': 1,
             'maxCpuSocket': 12,
@@ -182,13 +228,17 @@ class H3cCasClient(object):
             'storages': [{'cache': 'directsync',
                           'capacity': 10240,
                           'diskDevice': 'disk',
-                          'driveType': 'qcow2',
-                          'storeFile':
-                              '/vms/images/ubuntu_server_1404_x64.qcow2',
+                          # 'driveType': 'qcow2',
+                          # 'storeFile':
+                          #     '/vms/images/ubuntu_server_1404_x64.qcow2',
+                          'driveType': 'dos',
+                          'storageFile':
+                              '/dev/disk/by-path/ip-200.21.110.3:3260-iscsi-iqn.2013-09.com.prophetstor:flexvisor.53087136ddfa-lun-0',
                           'targetBus': 'virtio',
-                          'type': 'file'}],
+                          # 'type': 'file'
+                          'type': 'block'}],
             'system': 1,
-            'title': 'aju-test-rest-api',
+            'title': 'test_drp_iscsi_api',
             'viewType': 'vnc'}
         req_url = ''.join([self.url, H3CCAS_RES_MAP['create_server']])
         return self._rest_call(req_url, data=server_body, method='post')
@@ -246,7 +296,9 @@ def main():
                                           vswitch_id=vswitchs['vSwitch']['id'])
     sleep(3)
     servers = cas_client.servers_get_all(host_id=hosts['host']['id'])
-    if type(servers['domain']) is list:
+    if servers is None:
+        pass
+    elif type(servers['domain']) is list:
         for server in servers['domain']:
             server_info = cas_client.server_get_info(server_id=server['id'])
             start_server_results = cas_client.server_start(
@@ -265,6 +317,15 @@ def main():
         delete_server_results = cas_client.server_destroy(
             server_id=server['id'],
             server_name=server_info['title'])
+    storage_pools = cas_client.storage_pools_get_all(
+        host_id=hosts['host']['id'])
+    # new_stor_pool = cas_client.create_storage_pool()
+    # start_stor_pool = cas_client.start_storage_pool(
+    #     host_id=hosts['host']['id'],
+    #     stor_pool_name='drp-iscsi')
+    # delete_stor_pool = cas_client.delete_storage_pool(
+    #     host_id=hosts['host']['id'],
+    #     stor_pool_name='drp-iscsi')
 
 
 if __name__ == '__main__':
