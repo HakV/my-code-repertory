@@ -27,7 +27,7 @@ H3CCAS_RES_MAP = {
     'delete_storage_pool': '/cas/storage/host/storagepool'}
 
 
-class H3cCasClient(object):
+class H3CasClient(object):
     """Client of H3C CAS."""
 
     def __init__(self, host, port, username, password):
@@ -45,7 +45,7 @@ class H3cCasClient(object):
 
     def _login(self):
         """Try to login H3C CAS."""
-        login_url = '%s%s' % (self.url, H3CCAS_RES_MAP['auth'])
+        login_url = ''join([self.url, H3CCAS_RES_MAP['auth']])
 
         try:
             self._req(login_url, 'post', params=self.auth_param)
@@ -280,33 +280,46 @@ class H3cCasClient(object):
 
 
 def main():
-    cas_client = H3cCasClient(host='200.21.18.100',
+    cas_client = H3CasClient(host='200.21.18.100',
                               port='8080',
                               username='admin',
                               password='admin')
+    # Get all the h3c cas hosts.
     hosts = cas_client.hosts_get_all()
+    # Get the host information via host_id.
     host_info = cas_client.host_get_info(host_id=hosts['host']['id'])
+    # Get all the vSwitchs via host_id.
     vswitchs = cas_client.vswitchs_get_all(host_id=hosts['host']['id'])
+    # Get the vSwitch information via vswitch_id.
     vswitch_info = cas_client.vswitch_get_info(
         host_id=vswitchs['vSwitch']['hostId'],
         vswitch_id=vswitchs['vSwitch']['id'])
+    # Get all the share storage via host_id.
     share_storages = cas_client.share_storages_get_all(
         host_id=hosts['host']['id'])
+    # Create a new virtual machine.
     new_server = cas_client.create_server(host_id=hosts['host']['id'],
                                           vswitch_id=vswitchs['vSwitch']['id'])
     sleep(3)
+    # Get all the virtual machine via host_id.
     servers = cas_client.servers_get_all(host_id=hosts['host']['id'])
     if servers is None:
         pass
+    # The type of servers['domain'] is the list, when host have multi-serever.
     elif type(servers['domain']) is list:
         for server in servers['domain']:
+            # Get the virtual machine information via server_id.
             server_info = cas_client.server_get_info(server_id=server['id'])
+            # Start the server.
             start_server_results = cas_client.server_start(
                 server_id=server['id'])
+            # Get server's vnc information.
             vnc_info = cas_client.vnc_get_info(server_id=server['id'])
+            # Delete server.
             delete_server_results = cas_client.server_destroy(
                 server_id=server['id'],
                 server_name=server_info['title'])
+    # The type od servers['domain'] is the dict, when host have only one server.
     elif type(servers['domain']) is dict:
         server = servers['domain']
         server_info = cas_client.server_get_info(
@@ -317,15 +330,19 @@ def main():
         delete_server_results = cas_client.server_destroy(
             server_id=server['id'],
             server_name=server_info['title'])
+    # Get all the storage pools.
     storage_pools = cas_client.storage_pools_get_all(
         host_id=hosts['host']['id'])
-    # new_stor_pool = cas_client.create_storage_pool()
-    # start_stor_pool = cas_client.start_storage_pool(
-    #     host_id=hosts['host']['id'],
-    #     stor_pool_name='drp-iscsi')
-    # delete_stor_pool = cas_client.delete_storage_pool(
-    #     host_id=hosts['host']['id'],
-    #     stor_pool_name='drp-iscsi')
+    # Create a new storage pool.
+    new_stor_pool = cas_client.create_storage_pool()
+    # Start the storage pool.
+    start_stor_pool = cas_client.start_storage_pool(
+        host_id=hosts['host']['id'],
+        stor_pool_name='drp-iscsi')
+    # Delete the storage pool.
+    delete_stor_pool = cas_client.delete_storage_pool(
+        host_id=hosts['host']['id'],
+        stor_pool_name='drp-iscsi')
 
 
 if __name__ == '__main__':
