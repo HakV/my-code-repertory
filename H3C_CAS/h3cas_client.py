@@ -1,5 +1,3 @@
-"""H3C CAS Client."""
-
 import json
 import requests
 import six
