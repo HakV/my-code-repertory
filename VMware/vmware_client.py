@@ -1,3 +1,4 @@
+from uuuid import uuid4
 from urlparse import urlparse
 
 from oslo_vmware import api
@@ -14,6 +15,7 @@ MAX_SINGLE_CALL = 100
 VNC_CONFIG_KEY = 'config.extraConfig["RemoteDisplay.vnc.port"]'
 BIOS_MODE = 'bios'
 EFI_MODE = 'efi'
+MAX_NUMBER_OBJECTS_RETURN = 100
 
 VNC_PORT_START = 5600
 VNC_PORT_TOTAL = 1000
@@ -61,7 +63,7 @@ class VSphereClient(object):
                     server_username=username,
                     server_password=password,
                     api_retry_count=API_RETRY_COUNT,
-                    task_poll_interval=TASK_POLL_INNTERVAL,
+                    task_poll_interval=TASK_POLL_INTERVAL,
                     port=self.vsphere_port)
             except vexc.VimFaultException:
                 raise
@@ -79,7 +81,7 @@ class VSphereClient(object):
                 self.session.vim,
                 managed_object_type,
                 MAX_NUMBER_OBJECTS_RETURN)
-        except vexc.ManagedObjectNotFoundException as err:
+        except vexc.ManagedObjectNotFoundException:
             raise
         return managed_object
 
@@ -119,7 +121,7 @@ class VSphereClient(object):
                     if child.value == cluster_obj.value:
                         return datacenter.obj
                 elif child._type == 'HostSystem':
-                    if child.value == host.value:
+                    if child.value == host_obj.value:
                         return datacenter.obj
                 else:
                     continue
@@ -130,7 +132,7 @@ class VSphereClient(object):
         clusters = self._managed_object('ComputeResource')
 
         for cluster in clusters.objects:
-            hosts = _manager_properties_dict_get(cluster.obj, 'host')
+            hosts = self._manager_properties_dict_get(cluster.obj, 'host')
             if not hosts.get('host'):
                 continue
             for host in hosts.get('host')[0]:
@@ -226,7 +228,7 @@ class VSphereClient(object):
                         datastore.obj, 'summary').freeSpace
                     if free_space:
                         return datastore.propSet[0].val
-        raise exception.NoDataStore(host=host_ip)
+        raise
 
     def get_vdisk_info(self, vm_name):
         """Get virtual disk information fot vmware instance."""
@@ -297,8 +299,6 @@ class VSphereClient(object):
         return (initiator_protocol, initiator_name)
 
     def get_host_info(self, host_obj):
-        host_values_list = []
-
         host_name = host_obj.value
         # Get esxi host summary
         host_summary = self._manager_properties_dict_get(
@@ -351,9 +351,9 @@ class VSphereClient(object):
 
         while vms:
             for vm_obj in vms.objects:
-                if not hasattr(obj, 'propSet'):
+                if not hasattr(vm_obj, 'propSet'):
                     continue
-                dynamic_prop = obj.propSet[0]
+                dynamic_prop = vm_obj.propSet[0]
                 option_value = dynamic_prop.val
                 vnc_port = option_value.value
                 used_vnc_ports.add(int(vnc_port))
@@ -441,7 +441,7 @@ class VSphereClient(object):
                 'dvspg_key': dvspg_key,
                 'dvs_uuid': dvs_uuid,
                 'vlan_type': vlan_type,
-                'vlan_id': vlan_id)
+                'vlan_id': vlan_id}
             return dvsnetwork_info
 
     def create_vnc_config_spec(self, client_factory):
@@ -459,8 +459,10 @@ class VSphereClient(object):
         opt_keymap.value = 'en-us'
         return [opt_enabled, opt_port, opt_keymap]
 
-    def create_vswitch_port_group_config_spec(self, client_factory, vswitch_name,
-                                         port_group_name, vlan_id):
+    def create_vswitch_port_group_config_spec(self, client_factory,
+                                              vswitch_name,
+                                              port_group_name,
+                                              vlan_id):
         # Add spec to the virtual switch port.
         vswitch_port_group_spec = client_factory.\
             create('ns0:HostPortGroupSpec')
@@ -479,13 +481,13 @@ class VSphereClient(object):
         return vswitch_port_group_spec
 
     def create_vm_config_spec(self, name, host_ip, flavor, vif_infos,
-                            firmware=BIOS_MODE):
+                              firmware=BIOS_MODE):
         """Add spec to create virtualmachine"""
         datastore_name = self.get_datastore_name(host_ip)
         client_factory = self.session.vim.client.factory
         config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
 
-        instance_uuid = str(uuid.uuid4())
+        instance_uuid = str(uuid4())
         data_store_name = datastore_name
 
         config_spec.name = name
@@ -602,7 +604,7 @@ class VSphereClient(object):
         # Get host_mor for getting network_system_mor
         host_obj = self._get_host_obj(host_ip)
 
-        network_system = _manager_properties_dict_get(
+        network_system = self._manager_properties_dict_get(
             host_obj, 'configManager.networkSystem')
         try:
             # Execute add port group action for vSphere.
@@ -726,13 +728,13 @@ class VSphereClient(object):
                                            vm_obj,
                                            spec=config_spec)
         session.wait_for_task(reconfig_task)
-        return vm_ref, vnc_opts
+        return vnc_opts
 
     def remove_port_group(self, pg_name, host_ip):
         """Remove a port group on the host system"""
         session = self.session
         host_obj = self._get_host_obj(host_ip)
-        network_system = _manager_properties_dict_get(
+        network_system = self._manager_properties_dict_get(
             host_obj, 'configManager.networkSystem')
         try:
             session.invoke_api(session.vim,
