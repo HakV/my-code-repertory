@@ -143,13 +143,15 @@ class StressTestDB(object):
 
     def _get_engine(self, uri, debug=False):
         try:
-            engine = create_engine(uri, pool_size=100, pool_recycle=7200, echo=debug)
+            engine = create_engine(uri, pool_size=100, pool_recycle=7200,
+                                   echo=debug)
         except Exception as err:
             logging.info(">>> %s" % err)
         return engine
 
     def get_session(self):
-        session = scoped_session(sessionmaker(bind=self._engine, autoflush=True))
+        session = scoped_session(sessionmaker(bind=self._engine,
+                                              autoflush=True))
         return session
 
 
@@ -174,12 +176,11 @@ def do_stress_test(connect_uri, **kwargs):
             threading.Thread(target=insert_record,
                              name=('Thread: %s' % num),
                              args=(test_obj, num)).start()
-    except KeyboardInterrupt:
-        print "Quitting....."
+    except Exception:
+        print "Failed to create thread. Quitting....."
         sys.exit(0)
     finally:
-        begin_test = StressTestDB(connect_uri, debug)
-        db_total = begin_test.query_data()
+        db_total = test_obj.query_data()
         print "A total of %d data in Persons table" % db_total
 
 

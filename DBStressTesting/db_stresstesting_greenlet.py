@@ -5,8 +5,10 @@
 # You can use this script in the following ways:
 # such as:
 #
-#    python test-database.py -i 172.16.68.32 -u root -p password -P 3306 \
-#           -d test -t mysql -n 100 [-C "clean test db table"|-D "open debug" ]
+#    python db_stresstesting_multi_thread.py -i <mysql_server_ipaddr> -u root \
+#           -p <root_password> -P 3306 -d <database_name> \
+#           -t [mysql|orace|sqlserver] -n <record_count> \
+#           [-C "clean test db table"|-D "open debug" ]
 #
 # Code is reconstructed for test database
 # Defines the general class of the operating database, call Opeartion_DB class
@@ -14,16 +16,16 @@
 
 from datetime import datetime
 import functools
+from greenlet import greenlet
 import logging
 import optparse
 import os
 import sys
 import time
-import eventlet
 
 from sqlalchemy import create_engine
 from sqlalchemy import func, Column, Integer, String
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.ext import declarative
 
 Base = declarative.declarative_base()
@@ -51,7 +53,7 @@ def setup_logging():
     log_path = os.getcwd()
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(filename)"
-                               "s[line:%(lineno)d]"
+                               "s[line:%(lineno)d] {%(threadName)s} "
                                "%(levelname)s %(message)s",
                         datefmt="%a, %d %b %Y %H:%M:%S",
                         filename="%s/db_stresstesting.log" % log_path,
@@ -141,14 +143,15 @@ class StressTestDB(object):
 
     def _get_engine(self, uri, debug=False):
         try:
-            engine = create_engine(uri, echo=debug)
+            engine = create_engine(uri, pool_size=100, pool_recycle=7200,
+                                   echo=debug)
         except Exception as err:
             logging.info(">>> %s" % err)
         return engine
 
     def get_session(self):
-        maker = sessionmaker(bind=self._engine)
-        session = maker()
+        session = scoped_session(sessionmaker(bind=self._engine,
+                                              autoflush=True))
         return session
 
 
@@ -157,7 +160,7 @@ def do_clean_table(connect_uri):
     begin_test.drop_database()
 
 
-def insert_record(test_obj):
+def insert_record(test_obj, num):
     test_obj.add_test_data()
     logging.info(">>> Insert the %d commit data..." % num)
 
@@ -166,12 +169,12 @@ def insert_record(test_obj):
 def do_stress_test(connect_uri, **kwargs):
     """Start stress test database opeartion"""
     debug = kwargs['open_debug']
-    begin_test = StressTestDB(connect_uri, debug=debug)
-    begin_test.create_database()
-
+    test_obj = StressTestDB(connect_uri, debug=debug)
+    test_obj.create_database()
     try:
         for num in xrange(kwargs["total"]):
-            pass
+            gl = greenlet(run=insert_record)
+            gl.run(test_obj, num)
     except KeyboardInterrupt:
         print "Quitting....."
         sys.exit(0)
