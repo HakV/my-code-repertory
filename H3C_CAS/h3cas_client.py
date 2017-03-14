@@ -15,7 +15,7 @@ _SESSION = None
 
 REQUEST_OPT = [
     cfg.IntOpt('request_h3cas_timeout',
-               default=60,
+               default=180,
                help='Request h3c cas rest api timeout.'),
 ]
 
@@ -144,7 +144,7 @@ class H3CasClient(object):
                       {'url': url,
                        'err_code': res.status_code,
                        'content': res.content})
-            raise exception.RequestH3CasError(url=url,
+            raise exception.H3CasRequestError(url=url,
                                               err_code=res.status_code,
                                               err=res.content)
         return self._handle_res(res, raw, slug)
@@ -253,7 +253,7 @@ class H3CasClient(object):
     def storage_pool_create(self, stor_pool_info):
         """Create the storage pool with stor_pool_info.
 
-            e.g.
+            e.g.1: iSCSI device
                 stor_pool_info = {
                     'fsName':
                         'iqn.2013-09.com.prophetstor:flexvisor.53087136ddfa',
@@ -266,6 +266,17 @@ class H3CasClient(object):
                         'iqn.2013-09.com.prophetstor:flexvisor.53087136ddfa',
                     'title': 'drp-scsi',
                     'type': 'iscsi'}
+
+            e.g.2: NFS device
+                stor_pool_info = {
+                    'hostId': '9',
+                    'hostIp': '200.21.18.100',
+                    'name': 'drp-nfs'
+                    'path': '/vms/drp-nfs'
+                    'remoteDir': '/home/drp-server-nfs'
+                    'rsFsLunInfoList': []
+                    'title': 'drp-nfs'
+                    'type': 'netfs'}
         """
 
         req_url = self._url_combiner([
@@ -307,36 +318,57 @@ class H3CasClient(object):
     def server_create(self, create_info):
         """Create server with create_info.
 
-        e.g.
-            create_info = {
-                'name': 'h3c_cas_recovery',
-                'cluster_id': 1,
-                'host_id': 1,
-                'host_pool_id': 1,
-                'cpu_num': 2,
-                'memory': '4096',
-                'boot_drive': 'vga',
-                'networks': [{
-                    'name': 'vswitch0',
-                    'profileId': 1,
-                    'profileName': 'Default',
-                    'vswitchId': 1}]
-                'storages': [{
-                    'storeFile':
-                        '/dev/disk/by-path/ip-200.21.110.3:'
-                        '3260-iscsi-iqn.2013-09.com.prophetstor:'
-                        'flexvisor.53087136ddfa-lun-0'}]
-            }
+            e.g.1: Boot via block device (iSCSI)
+                create_info = {
+                    'name': 'h3c_cas_recovery',
+                    'cluster_id': 1,
+                    'host_id': 1,
+                    'host_pool_id': 1,
+                    'cpu_num': 2,
+                    'memory': '4096',
+                    'boot_drive': 'vga',
+                    'networks': [{
+                        'name': 'vswitch0',
+                        'profileId': 1,
+                        'profileName': 'Default',
+                        'vswitchId': 1}]
+                    'storages': [{
+                        'type': 'block',
+                        'driveType': 'dos',
+                        'storeFile':
+                            '/dev/disk/by-path/ip-200.21.110.3:'
+                            '3260-iscsi-iqn.2013-09.com.prophetstor:'
+                            'flexvisor.53087136ddfa-lun-0'}]
+                }
+
+            e.g.2: Boot via file (NFS)
+                create_info = {
+                    'name': 'h3c_cas_recovery',
+                    'cluster_id': 1,
+                    'host_id': 1,
+                    'host_pool_id': 1,
+                    'cpu_num': 2,
+                    'memory': '4096',
+                    'boot_drive': 'vga',
+                    'networks': [{
+                        'deviceModel': 'virtio',
+                        'name': 'vswitch0',
+                        'profileId': 1,
+                        'profileName': 'Default',
+                        'vswitchId': 1}]
+                    'storages': [{
+                        'targetBus': 'virtio',
+                        'type': 'file',
+                        'driveType': 'raw',
+                        'storeFile':
+                            '/vms/aaa/20170224T100502-2000-backup-flat.vmdk'}]
+                }
         """
-        def_network_params = {'deviceModel': 'virtio',
-                              'driver': 'vhost',
+        def_network_params = {'driver': 'vhost',
                               'mode': 'veb'}
         def_storage_params = {'cache': 'directsync',
                               'capacity': 10240,
-                              'diskDevice': 'disk',
-                              'driveType': 'dos',
-                              'targetBus': 'virtio',
-                              'type': 'block'}
+                              'diskDevice': 'disk'}
         for network in create_info['networks']:
             network.update(def_network_params)
         for storage in create_info['storages']:
