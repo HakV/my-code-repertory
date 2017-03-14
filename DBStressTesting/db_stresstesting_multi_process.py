@@ -16,8 +16,8 @@
 
 from datetime import datetime
 import functools
-from greenlet import greenlet
 import logging
+import multiprocessing
 import optparse
 import os
 import sys
@@ -168,13 +168,16 @@ def insert_record(test_obj, num):
 @timer
 def do_stress_test(connect_uri, **kwargs):
     """Start stress test database opeartion"""
+
     debug = kwargs['open_debug']
+    total = kwargs["total"]
+
     test_obj = StressTestDB(connect_uri, debug=debug)
     test_obj.create_database()
+
     try:
-        for num in xrange(kwargs["total"]):
-            gl = greenlet(run=insert_record)
-            gl.run(test_obj, num)
+        mpool = multiprocessing.pool(total)
+        mpool.map(insert_record, ((test_obj, i) for i in xrange(total)))
     except KeyboardInterrupt:
         print "Quitting....."
         sys.exit(0)

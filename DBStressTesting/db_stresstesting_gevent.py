@@ -21,7 +21,8 @@ import optparse
 import os
 import sys
 import time
-import threading
+from gevent import monkey
+import gevent
 
 from sqlalchemy import create_engine
 from sqlalchemy import func, Column, Integer, String
@@ -29,6 +30,7 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.ext import declarative
 
 Base = declarative.declarative_base()
+monkey.patch_all()
 
 DB_CONNECT_URI = {"mysql": "mysql://{user}:{password}@{ip}:{port}/{db}",
                   "oracle": "oracle://{user}:{password}@{ip}:{port}/{db}",
@@ -160,42 +162,30 @@ def do_clean_table(connect_uri):
     begin_test.drop_database()
 
 
-def insert_record(test_obj, base_num):
-    for _ in base_num:
-        test_obj.add_test_data()
-        logging.info(">>> Insert the %d commit data..." % base_num)
-
-
-def thread_generator(th_num, test_obj, base_num):
-    for th in xrange(th_num):
-        yield threading.Thread(target=insert_record,
-                               name=('Thread: %s' % th),
-                               args=(test_obj, base_num))
+def insert_record(test_obj, num):
+    test_obj.add_test_data()
+    logging.info(">>> Insert the %d commit data..." % num)
 
 
 @timer
 def do_stress_test(connect_uri, **kwargs):
     """Start stress test database opeartion"""
     debug = kwargs['open_debug']
-    th_num = kwargs["total"]
-    base_num = 1024
     test_obj = StressTestDB(connect_uri, debug=debug)
     test_obj.create_database()
-
     try:
-        threads = []
-        for thread in thread_generator(th_num, test_obj, base_num):
-            thread.start()
-            threads.append(thread)
 
-        for thread in threads:
-            thread.join()
+        gevents = []
+        for num in xrange(kwargs["total"]):
+            gevents.append(gevent.spawn(insert_record, test_obj, num))
+        gevent.joinall(gevents)
 
-    except Exception:
-        print "Failed to create thread. Quitting....."
+    except KeyboardInterrupt:
+        print "Quitting....."
         sys.exit(0)
     finally:
-        db_total = test_obj.query_data()
+        begin_test = StressTestDB(connect_uri, debug)
+        db_total = begin_test.query_data()
         print "A total of %d data in Persons table" % db_total
 
 
