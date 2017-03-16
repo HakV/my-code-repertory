@@ -42,7 +42,7 @@ def timer(func):
         start_time = time.time()
         func(*args, **kwargs)
         end_time = time.time()
-        print "Timer: %s" % (end_time-start_time)
+        print "Timer: %s" % (end_time - start_time)
 
     return wrapper
 
@@ -136,8 +136,8 @@ class StressTestDB(object):
         self._session.commit()
 
     def query_data(self):
-        data_total = self._session.query(func.count("*")).select_from(
-                                         StressTestTable).scalar()
+        data_total = self._session.query(
+            func.count("*")).select_from(StressTestTable).scalar()
 
         return data_total
 
@@ -176,7 +176,7 @@ def do_stress_test(connect_uri, **kwargs):
     test_obj.create_database()
 
     try:
-        mpool = multiprocessing.pool(total)
+        mpool = multiprocessing.Pool(total)
         mpool.map(insert_record, ((test_obj, i) for i in xrange(total)))
     except KeyboardInterrupt:
         print "Quitting....."

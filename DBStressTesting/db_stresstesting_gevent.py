@@ -44,7 +44,7 @@ def timer(func):
         start_time = time.time()
         func(*args, **kwargs)
         end_time = time.time()
-        print "Timer: %s" % (end_time-start_time)
+        print "Timer: %s" % (end_time - start_time)
 
     return wrapper
 
@@ -138,8 +138,8 @@ class StressTestDB(object):
         self._session.commit()
 
     def query_data(self):
-        data_total = self._session.query(func.count("*")).select_from(
-                                         StressTestTable).scalar()
+        data_total = self._session.query(
+            func.count("*")).select_from(StressTestTable).scalar()
 
         return data_total
 
