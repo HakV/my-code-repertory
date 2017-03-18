@@ -17,8 +17,8 @@ reload(sys)
 sys.setdefaultencoding("utf-8")
 
 SQLALCHEMY_DATABASE_URI = ('mysql+pymysql://smartwiki:'
-                           'smartwiki@200.21.0.30:3306/smartwiki?charset=utf8')
-SMARTWIKI_SERVER_IPADDR = 'http://200.21.0.30:8888'
+                           'smartwiki@<mysql_server_ipaddr>:3306/smartwiki?charset=utf8')
+SMARTWIKI_SERVER_IPADDR = '<smartwiki_server_ipaddr>'
 _ENGINE = None
 _SESSION_MAKER = None
 
