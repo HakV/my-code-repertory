@@ -1,4 +1,4 @@
-from uuuid import uuid4
+from uuid import uuid4
 from urlparse import urlparse
 
 from oslo_vmware import api
@@ -33,7 +33,7 @@ VIF_MODEL_VMXNET = 'vmxnet'
 VIF_MODEL_VMXNET3 = 'vmxnet3'
 
 
-class VSphereClient(object):
+class VMwareClient(object):
     """Client of vSphere."""
 
     def __init__(self, vsphere_url, username, password):
@@ -70,7 +70,7 @@ class VSphereClient(object):
             except Exception:
                 raise
 
-    def _managed_object(self, managed_object_type, action='get_objects'):
+    def _managed_object_get(self, managed_object_type, action='get_objects'):
         """Get managed object of vSphere."""
         try:
             # param: maximum number of objects that should be returned in a
@@ -129,7 +129,7 @@ class VSphereClient(object):
 
     def _get_cluster_obj(self, host_obj_value):
         """Get cluster reference via specified host_value from vSphere."""
-        clusters = self._managed_object('ComputeResource')
+        clusters = self._managed_object_get('ComputeResource')
 
         for cluster in clusters.objects:
             hosts = self._manager_properties_dict_get(cluster.obj, 'host')
@@ -148,8 +148,8 @@ class VSphereClient(object):
                      _type = "Host"
                  }
         """
-        hosts = self._managed_object('HostSystem')
-        self._managed_object('HostSystem', action='cancel_retrieval')
+        hosts = self._managed_object_get('HostSystem')
+        # self._managed_object_get('HostSystem', action='cancel_retrieval')
 
         if host_ip == self.vsphere_ipaddr:
             # The host belong to esxi host.
@@ -169,8 +169,8 @@ class VSphereClient(object):
                      _type = "VirtualMachine"
                  }
         """
-        vms = self._managed_object('VirtualMachine')
-        self._managed_object('VirtualMachine', action='cancel_retrieval')
+        vms = self._managed_object_get('VirtualMachine')
+        # self._managed_object_get('VirtualMachine', action='cancel_retrieval')
 
         for vm in vms.objects:
             if vm_name == vm.propSet[0].val:
@@ -539,7 +539,8 @@ class VSphereClient(object):
 
         return config_spec, vnc_opts
 
-    def create_iface_id_config_spec(self, client_factory, iface_id, port_index):
+    def create_iface_id_config_spec(self, client_factory,
+                                    iface_id, port_index):
         opt = client_factory.create('ns0:OptionValue')
         opt.key = "nvp.iface-id.%d" % port_index
         opt.value = iface_id
@@ -862,3 +863,14 @@ class VSphereClient(object):
             client_factory, controller_key,
             adapter_type, bus_number)
         return controller_spec
+
+
+if __name__ == '__main__':
+    vsphe_cli = VMwareClient(vsphere_url='https://200.21.102.4:443',
+                             username='root',
+                             password='sysadmin')
+    host_ip = vsphe_cli.vsphere_ipaddr
+
+    datacenters = vsphe_cli._get_datacenter_obj(host_ip)
+    host = vsphe_cli._get_host_obj(host_ip)
+    cluster = vsphe_cli._get_cluster_obj(host['value'])
