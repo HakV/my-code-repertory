@@ -1,9 +1,24 @@
-from uuid import uuid4
+# Copyright 2017 OpenStack Foundation
+# All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 from urlparse import urlparse
+from uuid import uuid4
 
 from oslo_vmware import api
-from oslo_vmware import vim_util
 from oslo_vmware import exceptions as vexc
+from oslo_vmware import vim_util
 
 
 _SESSION = None
@@ -99,6 +114,7 @@ class VMwareClient(object):
         return manager_properties_dict
 
     def _get_datacenter_obj(self, host_ip):
+        """Get Datacenter Managed object via ESXi Host Ipaddress."""
         datacenters = self._managed_object_get('Datacenter')
         for datacenter in datacenters.objects:
             host_folder = self._manager_properties_dict_get(datacenter.obj,
@@ -367,7 +383,7 @@ class VMwareClient(object):
         port_total = VNC_PORT_TOTAL
         used_vnc_ports = self.get_used_vnc_port()
         max_port = min_port + port_total
-        for port in range(min_port, max_port+1):
+        for port in range(min_port, max_port + 1):
             if port not in used_vnc_ports:
                 return port
         raise
@@ -375,7 +391,7 @@ class VMwareClient(object):
     def get_vswitch(self, host_ip):
         """Get vswitch reference via host ipaddr from vSphere.
 
-        :param host_ip: the host ipaddr.
+        :param host_ip: ipaddress of ESXi Host.
         :type: ``str``
 
         :rtype: ``suds.sudsobject.ArrayOfHostVirtualSwitch``
@@ -384,6 +400,53 @@ class VMwareClient(object):
         vswitchs = self._manager_properties_dict_get(host_obj,
                                                      'config.network.vswitch')
         return vswitchs
+
+    def _get_add_vswitch_port_group_spec(self, client_factory,
+                                         vswitch_name,
+                                         port_group_name,
+                                         vlan_id):
+        """Builds the virtual switch port group add spec."""
+        vswitch_port_group_spec = client_factory.create(
+            'ns0:HostPortGroupSpec')
+        vswitch_port_group_spec.name = port_group_name
+        vswitch_port_group_spec.vswitchName = vswitch_name
+
+        # VLAN ID of 0 means that VLAN tagging is not to be done for the
+        # network.
+        vswitch_port_group_spec.vlanId = int(vlan_id)
+
+        policy = client_factory.create('ns0:HostNetworkPolicy')
+        nicteaming = client_factory.create('ns0:HostNicTeamingPolicy')
+        nicteaming.notifySwitches = True
+        policy.nicTeaming = nicteaming
+
+        vswitch_port_group_spec.policy = policy
+        return vswitch_port_group_spec
+
+    def _get_add_vswitch_spec(self, client_factory, nics, mtu_num, ports_num):
+        """Builds the standard virtual switch add spec.
+
+           :param nics: List of Physical NIC Card. e.g. ['vmnic0', 'vmnic1']
+           :param mtu_num: Number of MTU.
+           :param ports_num: Number of PortGroups.
+        """
+        hvs_spec = client_factory.create('ns0:HostVirtualSwitchSpec')
+
+        bridge = client_factory.create('ns0:HostVirtualSwitchBondBridge')
+        bridge.nicDevice = nics
+        beacon = client_factory.create('ns0:HostVirtualSwitchBeaconConfig')
+        beacon.interval = 1
+        bridge.beacon = beacon
+        link_discovery_protocol_config = client_factory.create(
+            'ns0:LinkDiscoveryProtocolConfig')
+        link_discovery_protocol_config.protocol = 'cdp'
+        link_discovery_protocol_config.operation = 'listen'
+        bridge.linkDiscoveryProtocolConfig = link_discovery_protocol_config
+
+        hvs_spec.bridge = bridge
+        hvs_spec.mtu = mtu_num
+        hvs_spec.numPorts = ports_num
+        return hvs_spec
 
     def get_svsnetwork_vlanid(self, host_obj, port_group_name):
         # Get the vlan_id with port group.
@@ -458,27 +521,6 @@ class VMwareClient(object):
         opt_keymap.key = "RemoteDisplay.vnc.keyMap"
         opt_keymap.value = 'en-us'
         return [opt_enabled, opt_port, opt_keymap]
-
-    def create_vswitch_port_group_config_spec(self, client_factory,
-                                              vswitch_name,
-                                              port_group_name,
-                                              vlan_id):
-        # Add spec to the virtual switch port.
-        vswitch_port_group_spec = client_factory.\
-            create('ns0:HostPortGroupSpec')
-        vswitch_port_group_spec.name = port_group_name
-        vswitch_port_group_spec.vswitchName = vswitch_name
-        # VLAN ID of 0 means that VLAN tagging is not to be
-        # done for the network.
-        vswitch_port_group_spec.vlanId = int(vlan_id)
-
-        policy = client_factory.create('ns0:HostNetworkPolicy')
-        nicteaming = client_factory.create('ns0:HostNicTeamingPolicy')
-        nicteaming.notifySwitches = True
-        policy.nicTeaming = nicteaming
-        vswitch_port_group_spec.policy = policy
-
-        return vswitch_port_group_spec
 
     def create_vm_config_spec(self, name, host_ip, flavor, vif_infos,
                               firmware=BIOS_MODE):
@@ -595,12 +637,18 @@ class VMwareClient(object):
         network_spec.device = net_device
         return network_spec
 
-    def create_port_group(self, pg_name, vswitch_name, host_ip, vlan_id=0):
-        """Creates a port group on specific host."""
+    def create_vss_port_group(self, pg_name, vswitch_name, host_ip, vlan_id=0):
+        """Creates a Standard vCenter vSwitch port group on specific host.
+
+           :param pg_name: Standard vCenter vSwitch Port Group Name.
+           :param vswitch_name: Name of already exists Standard vSwitch
+           :param host_ip: ESXi Host Ipaddress.
+           :vlan_id: id of vlan.
+        """
         session = self.session
         client_factory = session.vim.client.factory
         # Make a spec for creating
-        port_group_spec = self.get_vswitch_port_group_spec(
+        port_group_spec = self._get_add_vswitch_port_group_spec(
             client_factory, vswitch_name, pg_name, vlan_id)
         # Get host_mor for getting network_system_mor
         host_obj = self._get_host_obj(host_ip)
@@ -611,7 +659,7 @@ class VMwareClient(object):
             # Execute add port group action for vSphere.
             session.invoke_api(session.vim,
                                "AddPortGroup",
-                               network_system,
+                               network_system['configManager.networkSystem'],
                                portgrp=port_group_spec)
         except vexc.AlreadyExistsException:
             # There can be a race condition when two instances try
@@ -619,6 +667,73 @@ class VMwareClient(object):
             # the other one will get an exception. Since we are
             # concerned with the port group being created, which is done
             # by the other call, we can ignore the exception.
+            raise
+
+    def create_vss(self, host_ip, vswitch_name, nics,
+                   mtu_num=1500, ports_num=120):
+        """Create the Standard vSwitch.
+
+           :param host_ip: Ipaddress of ESXi Host.
+           :param vswitch_name: Name of Standard vSwitch.
+           :param nics: List of NIC Cards.
+           :param mtu_num: MTU number of Standard vSwitch.
+           :param ports_num: PortGroup number of Standard vSwitch.
+        """
+        session = self.session
+        client_factory = session.vim.client.factory
+
+        host_virtual_switch_spec = self._get_add_vswitch_spec(client_factory,
+                                                              nics,
+                                                              mtu_num,
+                                                              ports_num)
+        host_obj = self._get_host_obj(host_ip)
+        network_system = self._manager_properties_dict_get(
+            host_obj, 'configManager.networkSystem')
+        try:
+            session.invoke_api(session.vim,
+                               "AddVirtualSwitch",
+                               network_system['configManager.networkSystem'],
+                               vswitchName=vswitch_name,
+                               spec=host_virtual_switch_spec)
+        except vexc.AlreadyExistsException:
+            raise
+        except Exception:
+            raise
+
+    def remove_vss(self, host_ip, vswitch_name):
+        """Remove the Standard vSwitch.
+
+           :param host_ip: Ipaddress of ESXi host.
+           :param vswitch_name: Standard vCenter vSwitch Name.
+        """
+        session = self.session
+        host_obj = self._get_host_obj(host_ip)
+        network_system = self._manager_properties_dict_get(
+            host_obj, 'configManager.networkSystem')
+        try:
+            session.invoke_api(session.vim,
+                               "RemoveVirtualSwitch",
+                               network_system['configManager.networkSystem'],
+                               vswitchName=vswitch_name)
+        except Exception:
+            raise
+
+    def remove_vss_port_group(self, pg_name, host_ip):
+        """Remove a Standard vSwitch PortGroup on specific host.
+
+           :param pg_name: Standard vCenter vSwitch Port Group Name.
+           :param host_ip: Ipaddress of ESXi host.
+        """
+        session = self.session
+        host_obj = self._get_host_obj(host_ip)
+        network_system = self._manager_properties_dict_get(
+            host_obj, 'configManager.networkSystem')
+        try:
+            session.invoke_api(session.vim,
+                               "RemovePortGroup",
+                               network_system['configManager.networkSystem'],
+                               pgName=pg_name)
+        except Exception:
             raise
 
     def vm_create(self, name, host_ip, flavor, vif_infos, firmware=BIOS_MODE):
@@ -730,20 +845,6 @@ class VMwareClient(object):
                                            spec=config_spec)
         session.wait_for_task(reconfig_task)
         return vnc_opts
-
-    def remove_port_group(self, pg_name, host_ip):
-        """Remove a port group on the host system"""
-        session = self.session
-        host_obj = self._get_host_obj(host_ip)
-        network_system = self._manager_properties_dict_get(
-            host_obj, 'configManager.networkSystem')
-        try:
-            session.invoke_api(session.vim,
-                               "RemovePortGroup",
-                               network_system,
-                               pg_name)
-        except Exception:
-            raise
 
     def convert_vif_model(self, name):
         # Converts standard VIF_MODEL types to the internal VMware ones.
@@ -863,14 +964,3 @@ class VMwareClient(object):
             client_factory, controller_key,
             adapter_type, bus_number)
         return controller_spec
-
-
-if __name__ == '__main__':
-    vsphe_cli = VMwareClient(vsphere_url='https://200.21.102.4:443',
-                             username='root',
-                             password='sysadmin')
-    host_ip = vsphe_cli.vsphere_ipaddr
-
-    datacenters = vsphe_cli._get_datacenter_obj(host_ip)
-    host = vsphe_cli._get_host_obj(host_ip)
-    cluster = vsphe_cli._get_cluster_obj(host['value'])
