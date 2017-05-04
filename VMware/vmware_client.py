@@ -113,6 +113,14 @@ class VMwareClient(object):
             raise
         return manager_properties_dict
 
+    def _wait_for_task(self, task_ref):
+        """Wait for vCenter task done."""
+        try:
+            result = self.session.wait_for_task(task_ref)
+        except Exception:
+            raise
+        return result
+
     def _get_datacenter_obj(self, host_ip):
         """Get Datacenter Managed object via ESXi Host Ipaddress."""
         datacenters = self._managed_object_get('Datacenter')
@@ -423,17 +431,17 @@ class VMwareClient(object):
         vswitch_port_group_spec.policy = policy
         return vswitch_port_group_spec
 
-    def _get_add_vswitch_spec(self, client_factory, nics, mtu_num, ports_num):
+    def _get_add_vswitch_spec(self, client_factory, nic, mtu_num, ports_num):
         """Builds the standard virtual switch add spec.
 
-           :param nics: List of Physical NIC Card. e.g. ['vmnic0', 'vmnic1']
+           :param nic: List of Physical NIC Card. e.g. ['vmnic0', 'vmnic1']
            :param mtu_num: Number of MTU.
            :param ports_num: Number of PortGroups.
         """
         hvs_spec = client_factory.create('ns0:HostVirtualSwitchSpec')
 
         bridge = client_factory.create('ns0:HostVirtualSwitchBondBridge')
-        bridge.nicDevice = nics
+        bridge.nicDevice = nic
         beacon = client_factory.create('ns0:HostVirtualSwitchBeaconConfig')
         beacon.interval = 1
         bridge.beacon = beacon
@@ -669,13 +677,13 @@ class VMwareClient(object):
             # by the other call, we can ignore the exception.
             raise
 
-    def create_vss(self, host_ip, vswitch_name, nics,
+    def create_vss(self, host_ip, vswitch_name, nic,
                    mtu_num=1500, ports_num=120):
         """Create the Standard vSwitch.
 
            :param host_ip: Ipaddress of ESXi Host.
            :param vswitch_name: Name of Standard vSwitch.
-           :param nics: List of NIC Cards.
+           :param nic: Name of Phy-NIC Cards.
            :param mtu_num: MTU number of Standard vSwitch.
            :param ports_num: PortGroup number of Standard vSwitch.
         """
@@ -683,7 +691,7 @@ class VMwareClient(object):
         client_factory = session.vim.client.factory
 
         host_virtual_switch_spec = self._get_add_vswitch_spec(client_factory,
-                                                              nics,
+                                                              nic,
                                                               mtu_num,
                                                               ports_num)
         host_obj = self._get_host_obj(host_ip)
@@ -820,6 +828,46 @@ class VMwareClient(object):
 
         else:
             raise Exception("Virtual machine method %s not found!" % action)
+
+    def vm_live_migration(self, vm_name, desc_host_ip):
+        """Virtual Machine vMotion migration.
+
+           vCenter Configuration Condition 1: Shared storage between different
+                                              hosts(iSCSI Shared Storage)
+           vCenter Configuration Condition 2: Network interconnection between
+                                              different hosts(VM Network)
+           :param vm_name: Name of vCenter virtualmachine.
+           :param host_ip: Ipaddress of DEST Migration ESXi Host.
+        """
+        session = self.session
+
+        host_obj = self._get_host_obj(desc_host_ip)
+        vm_obj = self._get_vm_obj(vm_name)
+        vms_obj = self._get_vm_via_host_obj(host_obj)
+
+        if not vms_obj:
+            raise
+        if vm_obj in vms_obj:
+            raise
+
+        try:
+            migration_task = session.invoke_api(
+                session.vim,
+                'MigrateVM_Task',
+                vm_obj,
+                host=host_obj,
+                priority='defaultPriority')
+        except Exception:
+            raise
+
+        result = self._wait_for_task(migration_task)
+        return result
+
+    def _get_vm_via_host_obj(self, host_obj):
+        vms = self._manager_properties_dict_get(host_obj, 'vm')
+        if vms:
+            return vms['vm']
+        return None
 
     def vm_state(self, vm_name):
         """Get vm state"""
