@@ -1,3 +1,5 @@
+"""H3C CAS Client."""
+
 import json
 import requests
 import six
@@ -44,7 +46,15 @@ H3CCAS_RES_MAP = {
     'storage_pool_create': '/cas/storage/pool/add',
     'storage_pool_delete': '/cas/storage/host/storagepool',
     'storage_pool_start':
-        '/cas/storage/host/{host_id}/storagepool/{stor_pool_name}/start'}
+        '/cas/storage/host/{host_id}/storagepool/{stor_pool_name}/start',
+    'storage_pool_stop':
+        '/cas/storage/host/{host_id}/storagepool/{stor_pool_name}/stop',
+    'task_message': '/cas/casrs/message/{msg_id}',
+    'server_backup': '/cas/backupStrategy/vmbackup',
+    'chk_bkp_scp_conn': '/cas/backupStrategy/connectTest',
+    'snapshots': '/cas/casrs/vm/snapshot/{server_id}',
+    'snapshot_create': '/cas/casrs/vm/snapshot',
+    'snapshot_delete': '/cas/casrs/vm/snapshot/{vm_id}/{snapshot_name}'}
 
 AUTO_MIGRATE = 1
 CPU_CORE_NUMBERS = 1
@@ -138,15 +148,16 @@ class H3CasClient(object):
             raise exception.AuthorizationFailure()
         elif res.status_code == 400 or \
                 (res.status_code >= 402 and res.status_code <= 600):
-            LOG.error(_LE("Failed to request h3c cas rest api %(url)s, "
-                          "error code %(err_code)s, detailed error info "
-                          "as %(content)s"),
-                      {'url': url,
-                       'err_code': res.status_code,
-                       'content': res.content})
-            raise exception.H3CasRequestError(url=url,
-                                              err_code=res.status_code,
-                                              err=res.content)
+            error_code = res.status_code
+            error_content = res.content
+            LOG.exception(
+                _LE("Failed to request h3c cas rest api %(url)s, "
+                    "error code %(error_code)s, detailed error info "
+                    "as %(content)s"),
+                {'url': url,
+                 'error_code': error_code,
+                 'content': error_content})
+            raise exception.H3CasRequestError(url=url)
         return self._handle_res(res, raw, slug)
 
     def _handle_res(self, res, raw, slug):
@@ -301,6 +312,15 @@ class H3CasClient(object):
                 stor_pool_name=stor_pool_name)])
         return self._rest_call(req_url, method='put')
 
+    def storage_pool_stop(self, host_id, stor_pool_name):
+        """Close storage pool with host id and storage pool name."""
+        req_url = self._url_combiner([
+            self.url,
+            H3CCAS_RES_MAP['storage_pool_stop'].format(
+                host_id=host_id,
+                stor_pool_name=stor_pool_name)])
+        return self._rest_call(req_url, method='put')
+
     def servers_get_all(self, host_id):
         """Get all the servers via host_id."""
         req_url = self._url_combiner([
@@ -374,7 +394,6 @@ class H3CasClient(object):
         for storage in create_info['storages']:
             storage.update(def_storage_params)
 
-        # FIXME(Fan Guiju): Using global variable to replace the numbers.
         server_body = {
             'autoMem': 0,
             'autoMigrate': AUTO_MIGRATE,
@@ -441,8 +460,105 @@ class H3CasClient(object):
             H3CCAS_RES_MAP['server_restart'].format(server_id=server_id)])
         return self._rest_call(req_url, method='put')
 
+    def server_backup(self, backup_body):
+        """Backup the server via backup_body.
+
+        :params backup_body: http request body of h3cas virtual machine backup
+
+            e.g.1: local backup
+                backup_body = {
+                    'backupName': 'test_backup',
+                    'vmid': '30',
+                    'storeMode': 0,
+                    'directory': '/h3cas_backup',
+                    'backupType': 0,
+                    'tmpDir': '/vms/vmbackuptmp',
+                    'type': 0,
+                    'isCompression': 1,
+                    'isMd5Check': 0,
+                    'readRatio': 500,
+                    'writeRatio': 500,
+                    'keepTimes': '10'
+                }
+
+            e.g.2: remote backup
+                backup_body = {
+                    'backupName': 'test_backup_2',
+                    'vmid': '30',
+                    'storeMode': 1,
+                    'directory': '/h3cas_backup',
+                    'targetAddr': '200.21.18.2',
+                    'userName': 'username',
+                    'password': 'pass',
+                    'backupType': 0,
+                    'tmpDir': '/vms/vmbackuptmp',
+                    'type': 1,
+                    'isCompression': 1,
+                    'isMd5Check': 0,
+                    'readRatio': 500,
+                    'writeRatio': 500,
+                    'keepTimes': '10'
+                }
+
+            - vmid: id of h3cas virtual machine
+            - storeMode: <0, 1>, store mode of backup
+                .. 0: local backup
+                .. 1: remote backup
+            - directory: directory for store backup date
+            - backupType: <0, 1, 2>, backup type of h3cas virtual machine
+                .. 0: Full backup
+                .. 1: Incremental backup
+                .. 2: Differential backup
+            - targetAddr: Ipaddress of remote server
+            - userName: username of remote server account
+            - password: password of remote server account
+            - type: type of data transmission protocol
+                .. 0: ftp
+                .. 1: scp
+        """
+        req_url = self._url_combiner([
+            self.url,
+            H3CCAS_RES_MAP['server_backup']])
+        return self._rest_call(req_url, data=backup_body, method='put')
+
+    def snapshots_get_all(self, server_id):
+        """Get all the snapshot from h3cas virtual machine."""
+        req_url = self._url_combiner([
+            self.url,
+            H3CCAS_RES_MAP['snapshots'].format(server_id=server_id)])
+        return self._rest_call(req_url, method='get')
+
+    def snapshot_create(self, snap_body):
+        """Create the h3cas virtual machine snapshot via snap_body.
+
+            e.g.:
+                snap_body = {
+                    'vmId': '87',
+                    'name': 'create_snapshot',
+                    'desc': 'test create snapshot.'}
+        """
+        req_url = self._url_combiner([
+            self.url,
+            H3CCAS_RES_MAP['snapshot_create']])
+        return self._rest_call(req_url, data=snap_body, method='post')
+
+    def snapshot_delete(self, vm_id, snapshot_name):
+        """Delete the h3cas virtual machine snapshot."""
+        req_url = self._url_combiner([
+            self.url,
+            H3CCAS_RES_MAP['snapshot_delete'].format(
+                vm_id=vm_id,
+                snapshot_name=snapshot_name)])
+        return self._rest_call(req_url, method='delete')
+
     def vnc_get_info(self, server_id):
         req_url = self._url_combiner([
             self.url,
             H3CCAS_RES_MAP['vnc'].format(server_id=server_id)])
+        return self._rest_call(req_url, method='get')
+
+    def task_message_get_info(self, msg_id):
+        req_url = self._url_combiner([
+            self.url,
+            H3CCAS_RES_MAP['task_message'].format(msg_id=msg_id)])
         return self._rest_call(req_url, method='get')
