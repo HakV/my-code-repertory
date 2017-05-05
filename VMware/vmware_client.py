@@ -416,17 +416,17 @@ class VMwareClient(object):
         vswitch_port_group_spec.policy = policy
         return vswitch_port_group_spec
 
-    def _get_add_vswitch_spec(self, client_factory, nic, mtu_num, ports_num):
+    def _get_add_vswitch_spec(self, client_factory, nics, mtu_num, ports_num):
         """Builds the standard virtual switch add spec.
 
-           :param nic: List of Physical NIC Card. e.g. ['vmnic0', 'vmnic1']
+           :param nics: Physical NIC Card or None. e.g. 'vmnic0'
            :param mtu_num: Number of MTU.
            :param ports_num: Number of PortGroups.
         """
         hvs_spec = client_factory.create('ns0:HostVirtualSwitchSpec')
 
         bridge = client_factory.create('ns0:HostVirtualSwitchBondBridge')
-        bridge.nicDevice = nic
+        bridge.nicDevice = nics,
         beacon = client_factory.create('ns0:HostVirtualSwitchBeaconConfig')
         beacon.interval = 1
         bridge.beacon = beacon
@@ -436,7 +436,8 @@ class VMwareClient(object):
         link_discovery_protocol_config.operation = 'listen'
         bridge.linkDiscoveryProtocolConfig = link_discovery_protocol_config
 
-        hvs_spec.bridge = bridge
+        if nics:
+            hvs_spec.bridge = bridge
         hvs_spec.mtu = mtu_num
         hvs_spec.numPorts = ports_num
         return hvs_spec
@@ -662,13 +663,13 @@ class VMwareClient(object):
             # by the other call, we can ignore the exception.
             raise
 
-    def create_vss(self, host_ip, vswitch_name, nic,
+    def create_vss(self, host_ip, vswitch_name, nics,
                    mtu_num=1500, ports_num=120):
         """Create the Standard vSwitch.
 
            :param host_ip: Ipaddress of ESXi Host.
            :param vswitch_name: Name of Standard vSwitch.
-           :param nic: Name of Phy-NIC Cards.
+           :param nics: Name of Phy-NIC Cards, the NIC have to free or None.
            :param mtu_num: MTU number of Standard vSwitch.
            :param ports_num: PortGroup number of Standard vSwitch.
         """
@@ -676,7 +677,7 @@ class VMwareClient(object):
         client_factory = session.vim.client.factory
 
         host_virtual_switch_spec = self._get_add_vswitch_spec(client_factory,
-                                                              nic,
+                                                              nics,
                                                               mtu_num,
                                                               ports_num)
         host_obj = self._get_host_obj(host_ip)
