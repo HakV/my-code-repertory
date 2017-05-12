@@ -3,6 +3,7 @@
 import json
 import requests
 import six
+import time
 from urllib import urlencode
 
 from oslo_config import cfg
@@ -40,6 +41,9 @@ H3CCAS_RES_MAP = {
     'server_start': '/cas/domain/{server_id}/start',
     'server_stop': '/cas/domain/{server_id}/close',
     'server_restart': '/cas/domain/{server_id}/restart',
+    'server_restore': '/cas/restore/vm',
+    'server_backup': '/cas/backupStrategy/vmbackup',
+    'server_backup_trees': '/cas/backupStrategy/{server_id}/backupFileTree',
     'vnc': '/cas/casrs/vmvnc/vnc/{server_id}',
     'host_initiatorname': '/cas/host/{host_id}/queryHostInitiatorName',
     'storage_pools': '/cas/casrs/storage/pool?hostId={host_id}',
@@ -49,18 +53,15 @@ H3CCAS_RES_MAP = {
         '/cas/storage/host/{host_id}/storagepool/{stor_pool_name}/start',
     'storage_pool_stop':
         '/cas/storage/host/{host_id}/storagepool/{stor_pool_name}/stop',
-    'task_message': '/cas/casrs/message/{msg_id}',
-    'server_backup': '/cas/backupStrategy/vmbackup',
-    'chk_bkp_scp_conn': '/cas/backupStrategy/connectTest',
-    'snapshots': '/cas/casrs/vm/snapshot/{server_id}',
-    'snapshot_create': '/cas/casrs/vm/snapshot',
-    'snapshot_delete': '/cas/casrs/vm/snapshot/{vm_id}/{snapshot_name}'}
+    'task_message': '/cas/casrs/message/{msg_id}'}
 
 AUTO_MIGRATE = 1
 CPU_CORE_NUMBERS = 1
 CPU_NUMBERS = 2
 CPU_SCHEDULING_PRIORITY = 1024
 IO_SCHEDULING_PRIORITY = 500
+
+CAS_REST_REQ_TIMEOUT = 120
 
 
 class H3CasClient(object):
@@ -394,6 +395,7 @@ class H3CasClient(object):
         for storage in create_info['storages']:
             storage.update(def_storage_params)
 
+        # FIXME(Fan Guiju): Using global variable to replace the numbers.
         server_body = {
             'autoMem': 0,
             'autoMigrate': AUTO_MIGRATE,
@@ -460,96 +462,112 @@ class H3CasClient(object):
             H3CCAS_RES_MAP['server_restart'].format(server_id=server_id)])
         return self._rest_call(req_url, method='put')
 
-    def server_backup(self, backup_body):
-        """Backup the server via backup_body.
+    def server_backup(self, server_id, serverbackup_name, serverbackup_type,
+                      backup_dest_dir, remote_copy_type=0):
+        """Backup the h3cas virtualmachine via backup_values as below.
 
-        :params backup_body: http request body of h3cas virtual machine backup
+           eg. backup_values = {
+                   backupName: "centos7_backup_4",
+                   backupType: "1",
+                   directory: "/mnt/h3cas_backup",
+                   isCompression: 1,
+                   isMd5Check: 0,
+                   keepTimes: "30",
+                   readRatio: 500,
+                   storeMode: 0,
+                   tmpDir: "/vms/vmbackuptmp",
+                   type: 0,
+                   vmId: "12",
+                   writeRatio: 500
+               }
+        """
+        backup_params = {
+            'vmId': server_id,
+            'backupName': serverbackup_name,
+            'backupType': serverbackup_type,
+            'directory': backup_dest_dir,
+            'type': remote_copy_type,
+            'isCompression': 1,
+            'isMd5Check': 0,
+            'keepTimes': '30',
+            'writeRatio': 500,
+            'readRatio': 500,
+            'storeMode': 0,
+            'tmpDir': '/vms/vmbackuptmp'}
+        req_url = self._url_combiner([self.url,
+                                      H3CCAS_RES_MAP['server_backup']])
+        return self._rest_call(req_url, method='post', data=backup_params)
 
-            e.g.1: local backup
-                backup_body = {
-                    'backupName': 'test_backup',
-                    'vmid': '30',
-                    'storeMode': 0,
-                    'directory': '/h3cas_backup',
-                    'backupType': 0,
-                    'tmpDir': '/vms/vmbackuptmp',
-                    'type': 0,
-                    'isCompression': 1,
-                    'isMd5Check': 0,
-                    'readRatio': 500,
-                    'writeRatio': 500,
-                    'keepTimes': '10'
-                }
+    def server_backup_trees_get_all(self, server_id):
+        """Get all the backup information of h3cas virtualmachine.
 
-            e.g.2: remote backup
-                backup_body = {
-                    'backupName': 'test_backup_2',
-                    'vmid': '30',
-                    'storeMode': 1,
-                    'directory': '/h3cas_backup',
-                    'targetAddr': '200.21.18.2',
-                    'userName': 'username',
-                    'password': 'pass',
-                    'backupType': 0,
-                    'tmpDir': '/vms/vmbackuptmp',
-                    'type': 1,
-                    'isCompression': 1,
-                    'isMd5Check': 0,
-                    'readRatio': 500,
-                    'writeRatio': 500,
-                    'keepTimes': '10'
-                }
-
-            - vmid: id of h3cas virtual machine
-            - storeMode: <0, 1>, store mode of backup
-                .. 0: local backup
-                .. 1: remote backup
-            - directory: directory for store backup date
-            - backupType: <0, 1, 2>, backup type of h3cas virtual machine
-                .. 0: Full backup
-                .. 1: Incremental backup
-                .. 2: Differential backup
-            - targetAddr: Ipaddress of remote server
-            - userName: username of remote server account
-            - password: password of remote server account
-            - type: type of data transmission protocol
-                .. 0: ftp
-                .. 1: scp
+           response as below:
+               {
+                   "state": 0,
+                   "errorCode": 0,
+                   "successMessage": null,
+                   "failureMessage": null,
+                   "data":[
+                       {
+                           "targetAddr": null,
+                           "location": "local_directory: /mnt/h3cas_backup",
+                           "children": [
+                           ],
+                           "type": "cp",
+                           "password": null,
+                           "mode": 10,
+                           "size": 565.4296875,
+                           "id": 41,
+                           "isDelete": 0,
+                           "parentId": 0,
+                           "time": 1494426873000,
+                           "directory": "/mnt/h3cas_backup",
+                           "domainId": 12,
+                           "name": "centos7_backup_0",
+                           "isLeaf": 0,
+                           "userName": null
+                       }
+                   ],
+                   "success": true
+               }
         """
         req_url = self._url_combiner([
             self.url,
-            H3CCAS_RES_MAP['server_backup']])
-        return self._rest_call(req_url, data=backup_body, method='put')
-
-    def snapshots_get_all(self, server_id):
-        """Get all the snapshot from h3cas virtual machine."""
-        req_url = self._url_combiner([
-            self.url,
-            H3CCAS_RES_MAP['snapshots'].format(server_id=server_id)])
+            H3CCAS_RES_MAP['server_backup_trees'].format(server_id=server_id)])
         return self._rest_call(req_url, method='get')
 
-    def snapshot_create(self, snap_body):
-        """Create the h3cas virtual machine snapshot via snap_body.
+    def server_restore(self, backup_id, backup_dir, backup_time,
+                       backup_type='cp', username=None, password=None,
+                       target_ipaddr=None):
+        """Restore the h3cas virthalmachine via restore_values as below.
 
-            e.g.:
-                snap_body = {
-                    'vmId': '87',
-                    'name': 'create_snapshot',
-                    'desc': 'test create snapshot.'}
+            e.g. restore_values = {
+                     backupId: 43,
+                     directory: "/mnt/h3cas_backup",
+                     entryType: "VIRTUAL_HOST",
+                     isForce: false,
+                     userName: null,
+                     password: null,
+                     targetAddr: null,
+                     time: 1494428388000,
+                     tmpDir: "/vms/vmbackuptmp",
+                     type: "cp",
+                 }
         """
-        req_url = self._url_combiner([
-            self.url,
-            H3CCAS_RES_MAP['snapshot_create']])
-        return self._rest_call(req_url, data=snap_body, method='post')
-
-    def snapshot_delete(self, vm_id, snapshot_name):
-        """Delete the h3cas virtual machine snapshot."""
-        req_url = self._url_combiner([
-            self.url,
-            H3CCAS_RES_MAP['snapshot_delete'].format(
-                vm_id=vm_id,
-                snapshot_name=snapshot_name)])
-        return self._rest_call(req_url, method='delete')
+        restore_params = {
+            'backupId': backup_id,
+            'directory': backup_dir,
+            'entryType': 'VIRTUAL_HOST',
+            'isForce': False,
+            'userName': username,
+            'password': password,
+            'targetAddr': target_ipaddr,
+            'time': backup_time,
+            'tmpDir': '/vms/vmbackuptmp',
+            'type': backup_type}
+        req_url = self._url_combiner([self.url,
+                                      H3CCAS_RES_MAP['server_restore']])
+        return self._rest_call(req_url, method='put', data=restore_params)
 
     def vnc_get_info(self, server_id):
         req_url = self._url_combiner([
@@ -562,3 +580,33 @@ class H3CasClient(object):
             self.url,
             H3CCAS_RES_MAP['task_message'].format(msg_id=msg_id)])
         return self._rest_call(req_url, method='get')
+
+    def wait_for_task(self, req_result):
+        if req_result.get('success'):
+            msg_id = req_result['data']
+            timeout = CAS_REST_REQ_TIMEOUT
+            while timeout >= 0:
+                task_info = self.task_message_get_info(msg_id)
+                if task_info['completed'] and task_info['progress'] == '100':
+                    return task_info
+                timeout -= 2
+                time.sleep(2)
+            raise
+        raise
+
+
+if __name__ == '__main__':
+    h3cas_cli = H3CasClient(auth_url='http://200.21.18.100:8080',
+                            username='admin',
+                            password='admin')
+    hosts = h3cas_cli.hosts_get_all()
+    servers = h3cas_cli.servers_get_all(host_id=hosts['host']['id'])
+    server_backup_trees = h3cas_cli.server_backup_trees_get_all(
+        server_id=servers['domain']['id'])
+    backup_info = server_backup_trees['data'][0]['children'][3]
+    # Restore the h3cas virtualmachine.
+    req_result = h3cas_cli.server_restore(backup_id=backup_info['id'],
+                                          backup_dir=backup_info['directory'],
+                                          backup_time=backup_info['time'])
+    task_result = h3cas_cli.wait_for_task(req_result)
+    print task_result
